@@ -2,6 +2,7 @@
 // files and reviews through these functions.
 import { getDb } from './db.js';
 import { newId, HttpError } from './util.js';
+import { nameKey, duplicateScore, DUPLICATE_THRESHOLD } from './naming.js';
 
 // ---- venues ----------------------------------------------------------------
 
@@ -9,15 +10,31 @@ export function createVenue(input) {
   const db = getDb();
   const id = newId('ven');
   db.prepare(`
-    INSERT INTO venues (id, name, type, address, city, region, country,
+    INSERT INTO venues (id, name, name_key, type, address, city, region, country,
                         latitude, longitude, capacity, website, description, submitted_by, geometry)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    id, input.name, input.type, input.address, input.city, input.region, input.country,
+    id, input.name, nameKey(input.name), input.type, input.address, input.city, input.region, input.country,
     input.latitude, input.longitude, input.capacity, input.website, input.description,
     input.submitted_by, input.geometry ?? null,
   );
   return getVenue(id);
+}
+
+// Find venues that are likely the same as the given candidate, ranked by score.
+// Used to warn on submission and to power admin de-duplication.
+export function findSimilarVenues({ name, city, country, excludeId, limit = 6 } = {}) {
+  const db = getDb();
+  const candidate = { name, name_key: nameKey(name), city, country };
+  const rows = db.prepare('SELECT id, name, name_key, city, region, country, status FROM venues').all();
+  const scored = [];
+  for (const v of rows) {
+    if (excludeId && v.id === excludeId) continue;
+    const score = duplicateScore(candidate, v);
+    if (score >= DUPLICATE_THRESHOLD) scored.push({ ...v, score: Number(score.toFixed(3)) });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
 }
 
 // Store the vendor-neutral geometry model (already-validated JSON string).
@@ -55,17 +72,20 @@ function withGeometryFlag(venue) {
   return venue;
 }
 
-export function listVenues({ q, country, type, limit = 50, offset = 0 } = {}) {
+export function listVenues({ q, country, type, status = 'published', limit = 50, offset = 0 } = {}) {
   const db = getDb();
   const where = [];
   const params = [];
   if (q) {
-    where.push('(v.name LIKE ? OR v.city LIKE ? OR v.country LIKE ? OR v.description LIKE ?)');
+    // Match name/city/country/description, and any alias (former/aka names).
+    where.push(`(v.name LIKE ? OR v.city LIKE ? OR v.country LIKE ? OR v.description LIKE ?
+      OR v.id IN (SELECT venue_id FROM venue_aliases WHERE alias LIKE ?))`);
     const like = `%${q}%`;
-    params.push(like, like, like, like);
+    params.push(like, like, like, like, like);
   }
   if (country) { where.push('v.country = ?'); params.push(country); }
   if (type) { where.push('v.type = ?'); params.push(type); }
+  if (status !== 'all') { where.push('v.status = ?'); params.push(status); }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const rows = db.prepare(`
@@ -90,9 +110,10 @@ export function createFile(venueId, input) {
   if (!getVenue(venueId)) throw new HttpError(404, 'Venue not found');
   const id = newId('file');
   db.prepare(`
-    INSERT INTO files (id, venue_id, filename, application, app_version, description, uploader_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, venueId, input.filename, input.application, input.app_version, input.description, input.uploader_name);
+    INSERT INTO files (id, venue_id, filename, application, app_version, description, uploader_name, consent)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, venueId, input.filename, input.application, input.app_version, input.description,
+    input.uploader_name, input.consent ? 1 : 0);
   return getFile(id);
 }
 
@@ -173,10 +194,151 @@ export function listReviews(fileId) {
 
 export function stats() {
   const db = getDb();
-  const venues = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
+  const venues = db.prepare("SELECT COUNT(*) AS n FROM venues WHERE status = 'published'").get().n;
   const files = db.prepare("SELECT COUNT(*) AS n FROM files WHERE status IN ('ready','reference')").get().n;
   const reviews = db.prepare('SELECT COUNT(*) AS n FROM reviews').get().n;
-  const countries = db.prepare("SELECT COUNT(DISTINCT country) AS n FROM venues WHERE country IS NOT NULL AND country <> ''").get().n;
-  const models = db.prepare("SELECT COUNT(*) AS n FROM venues WHERE geometry IS NOT NULL AND geometry <> ''").get().n;
+  const countries = db.prepare("SELECT COUNT(DISTINCT country) AS n FROM venues WHERE status = 'published' AND country IS NOT NULL AND country <> ''").get().n;
+  const models = db.prepare("SELECT COUNT(*) AS n FROM venues WHERE status = 'published' AND geometry IS NOT NULL AND geometry <> ''").get().n;
   return { venues, files, reviews, countries, models };
+}
+
+// ---- aliases ---------------------------------------------------------------
+
+export function listAliases(venueId) {
+  const db = getDb();
+  return db.prepare('SELECT * FROM venue_aliases WHERE venue_id = ? ORDER BY created_at ASC').all(venueId);
+}
+
+export function addAlias(venueId, alias, kind = 'aka') {
+  const db = getDb();
+  if (!getVenue(venueId)) throw new HttpError(404, 'Venue not found');
+  const trimmed = String(alias || '').trim();
+  if (!trimmed) throw new HttpError(422, 'alias is required');
+  // Skip duplicates (case-insensitive) for the same venue.
+  const exists = db.prepare('SELECT 1 FROM venue_aliases WHERE venue_id = ? AND alias_key = ?').get(venueId, nameKey(trimmed));
+  if (exists) return listAliases(venueId);
+  db.prepare(`
+    INSERT INTO venue_aliases (id, venue_id, alias, alias_key, kind) VALUES (?, ?, ?, ?, ?)
+  `).run(newId('alias'), venueId, trimmed, nameKey(trimmed), kind);
+  return listAliases(venueId);
+}
+
+// ---- admin: edit / status / delete / merge ---------------------------------
+
+const EDITABLE_VENUE_FIELDS = [
+  'name', 'type', 'address', 'city', 'region', 'country',
+  'latitude', 'longitude', 'capacity', 'website', 'description',
+];
+
+export function updateVenue(id, fields) {
+  const db = getDb();
+  if (!getVenue(id)) throw new HttpError(404, 'Venue not found');
+  const sets = [];
+  const params = [];
+  for (const key of EDITABLE_VENUE_FIELDS) {
+    if (fields[key] !== undefined) { sets.push(`${key} = ?`); params.push(fields[key]); }
+  }
+  if (fields.name !== undefined) { sets.push('name_key = ?'); params.push(nameKey(fields.name)); }
+  if (!sets.length) return getVenue(id);
+  sets.push("updated_at = datetime('now')");
+  db.prepare(`UPDATE venues SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+  return getVenue(id);
+}
+
+export function setVenueStatus(id, status) {
+  const db = getDb();
+  if (!['published', 'hidden', 'flagged'].includes(status)) throw new HttpError(422, 'invalid status');
+  if (!getVenue(id)) throw new HttpError(404, 'Venue not found');
+  db.prepare("UPDATE venues SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, id);
+  return getVenue(id);
+}
+
+export function deleteVenue(id) {
+  const db = getDb();
+  if (!getVenue(id)) throw new HttpError(404, 'Venue not found');
+  db.prepare('DELETE FROM venues WHERE id = ?').run(id); // cascades files/reviews/aliases
+  return { deleted: id };
+}
+
+// Fold `sourceId` into `targetId`: move files, geometry (if target has none),
+// aliases and open fix requests, record the source name as a former-name alias,
+// then delete the source venue.
+export function mergeVenues(sourceId, targetId) {
+  const db = getDb();
+  if (sourceId === targetId) throw new HttpError(422, 'Cannot merge a venue into itself');
+  const source = db.prepare('SELECT * FROM venues WHERE id = ?').get(sourceId);
+  const target = db.prepare('SELECT * FROM venues WHERE id = ?').get(targetId);
+  if (!source) throw new HttpError(404, 'Source venue not found');
+  if (!target) throw new HttpError(404, 'Target venue not found');
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE files SET venue_id = ? WHERE venue_id = ?').run(targetId, sourceId);
+    db.prepare('UPDATE fix_requests SET venue_id = ? WHERE venue_id = ?').run(targetId, sourceId);
+    if ((!target.geometry || !target.geometry.length) && source.geometry) {
+      db.prepare("UPDATE venues SET geometry = ?, updated_at = datetime('now') WHERE id = ?").run(source.geometry, targetId);
+    }
+    // Move source's aliases to target.
+    db.prepare('UPDATE venue_aliases SET venue_id = ? WHERE venue_id = ?').run(targetId, sourceId);
+    // Record the source name as a former-name alias of the target.
+    db.prepare(`INSERT INTO venue_aliases (id, venue_id, alias, alias_key, kind) VALUES (?, ?, ?, ?, 'former')`)
+      .run(newId('alias'), targetId, source.name, nameKey(source.name));
+    db.prepare('DELETE FROM venues WHERE id = ?').run(sourceId);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return getVenue(targetId);
+}
+
+// ---- fix requests ----------------------------------------------------------
+
+export function createFixRequest(input) {
+  const db = getDb();
+  if (input.venue_id && !getVenue(input.venue_id)) throw new HttpError(404, 'Venue not found');
+  const id = newId('fix');
+  db.prepare(`
+    INSERT INTO fix_requests (id, venue_id, file_id, type, message, suggestion, reporter_name, reporter_contact)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.venue_id ?? null, input.file_id ?? null, input.type, input.message,
+    input.suggestion ?? null, input.reporter_name ?? null, input.reporter_contact ?? null);
+  return getFixRequest(id);
+}
+
+export function getFixRequest(id) {
+  const db = getDb();
+  return db.prepare('SELECT * FROM fix_requests WHERE id = ?').get(id) || null;
+}
+
+export function listFixRequests({ status = 'open', limit = 100 } = {}) {
+  const db = getDb();
+  const rows = status === 'all'
+    ? db.prepare('SELECT * FROM fix_requests ORDER BY created_at DESC LIMIT ?').all(limit)
+    : db.prepare('SELECT * FROM fix_requests WHERE status = ? ORDER BY created_at DESC LIMIT ?').all(status, limit);
+  // Attach the current venue name for context.
+  return rows.map((r) => {
+    const v = r.venue_id ? db.prepare('SELECT name FROM venues WHERE id = ?').get(r.venue_id) : null;
+    return { ...r, venue_name: v ? v.name : null };
+  });
+}
+
+export function resolveFixRequest(id, { status, admin_note } = {}) {
+  const db = getDb();
+  if (!['resolved', 'dismissed', 'open'].includes(status)) throw new HttpError(422, 'invalid status');
+  if (!getFixRequest(id)) throw new HttpError(404, 'Fix request not found');
+  const resolvedAt = status === 'open' ? null : "datetime('now')";
+  db.prepare(`UPDATE fix_requests SET status = ?, admin_note = ?, resolved_at = ${resolvedAt === null ? 'NULL' : resolvedAt} WHERE id = ?`)
+    .run(status, admin_note ?? null, id);
+  return getFixRequest(id);
+}
+
+export function adminStats() {
+  const db = getDb();
+  return {
+    venues_total: db.prepare('SELECT COUNT(*) AS n FROM venues').get().n,
+    venues_hidden: db.prepare("SELECT COUNT(*) AS n FROM venues WHERE status <> 'published'").get().n,
+    fix_open: db.prepare("SELECT COUNT(*) AS n FROM fix_requests WHERE status = 'open'").get().n,
+    files: db.prepare("SELECT COUNT(*) AS n FROM files WHERE status IN ('ready','reference')").get().n,
+  };
 }

@@ -83,7 +83,7 @@ function seed() {
 
     for (const f of DEMO_FILES[v.name] || []) {
       const { reviews = [], ...fileInput } = f;
-      const file = repo.createFile(venue.id, fileInput);
+      const file = repo.createFile(venue.id, { ...fileInput, consent: true });
       const content = Buffer.from(
         `PLACEHOLDER demo file for ${venue.name}\n` +
         `Application: ${fileInput.application}\n` +

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PORT, HOST, PUBLIC_DIR } from './config.js';
 import { HttpError, sendJson } from './util.js';
 import { routes } from './api.js';
+import { adminToken, adminTokenWasGenerated } from './auth.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -46,8 +47,8 @@ export function createServer() {
   return http.createServer(async (req, res) => {
     // Open, embeddable API: permissive CORS.
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Token');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -70,7 +71,8 @@ export function createServer() {
       if (res.headersSent) { res.destroy(); return; }
       const status = err instanceof HttpError ? err.status : 500;
       if (status >= 500) console.error('[server]', err);
-      sendJson(res, status, { error: err.message || 'Internal error', details: err.details });
+      const details = err instanceof HttpError && err.details && typeof err.details === 'object' ? err.details : {};
+      sendJson(res, status, { error: err.message || 'Internal error', ...details });
     }
   });
 }
@@ -79,6 +81,14 @@ export function createServer() {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const server = createServer();
   server.listen(PORT, HOST, () => {
-    console.log(`Venue Database running at http://${HOST}:${PORT}`);
+    console.log(`VenueBridge running at http://${HOST}:${PORT}`);
+    const token = adminToken();
+    if (adminTokenWasGenerated()) {
+      console.log(`Admin panel: ${'/admin'} — ADMIN_TOKEN not set, using generated dev token:`);
+      console.log(`  ${token}`);
+      console.log('  (set ADMIN_TOKEN in the environment for a stable token in production)');
+    } else {
+      console.log('Admin panel: /admin (ADMIN_TOKEN configured from environment)');
+    }
   });
 }

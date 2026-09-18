@@ -9,8 +9,10 @@ import path from 'node:path';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vdb-test-'));
 process.env.VDB_DATA_DIR = tmp;
 process.env.VDB_DB_PATH = path.join(tmp, 'test.sqlite');
+process.env.ADMIN_TOKEN = 'test-admin-token';
 
 const { createServer } = await import('../src/server.js');
+const ADMIN = { 'X-Admin-Token': 'test-admin-token' };
 
 let server;
 let base;
@@ -26,14 +28,16 @@ after(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-async function jpost(url, body) {
+async function jreq(method, url, body, headers = {}) {
   const res = await fetch(base + url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return { status: res.status, body: await res.json() };
+  const isJson = (res.headers.get('content-type') || '').includes('application/json');
+  return { status: res.status, body: isJson ? await res.json() : null };
 }
+const jpost = (url, body, headers) => jreq('POST', url, body, headers);
 
 test('meta endpoint returns config', async () => {
   const res = await fetch(base + '/api/meta');
@@ -68,7 +72,7 @@ test('full venue → file → review lifecycle', async () => {
   // 3. create file metadata
   const fileMeta = await jpost(`/api/venues/${venueId}/files`, {
     filename: 'design.dbpro', application: 'ArrayCalc', app_version: '11.2',
-    description: 'main hang', uploader_name: 'Tester',
+    description: 'main hang', uploader_name: 'Tester', consent: true,
   });
   assert.equal(fileMeta.status, 201);
   const fileId = fileMeta.body.id;
@@ -111,7 +115,7 @@ test('full venue → file → review lifecycle', async () => {
 
 test('rejects invalid rating', async () => {
   const v = await jpost('/api/venues', { name: 'Rating Venue' });
-  const f = await jpost(`/api/venues/${v.body.id}/files`, { filename: 'x.svml' });
+  const f = await jpost(`/api/venues/${v.body.id}/files`, { filename: 'x.svml', consent: true });
   await fetch(base + f.body.uploadUrl, { method: 'POST', body: 'data' });
   const bad = await jpost(`/api/files/${f.body.id}/reviews`, { rating: 9 });
   assert.equal(bad.status, 422);
@@ -159,7 +163,7 @@ test('geometry: store neutral model, convert to DXF/OBJ/JSON', async () => {
   };
   const v = await jpost('/api/venues', { name: 'Geometry Hall' });
   const set = await fetch(base + `/api/venues/${v.body.id}/geometry`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(model),
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...model, consent: true }),
   });
   assert.equal(set.status, 200);
   assert.equal((await set.json()).has_geometry, true);
@@ -200,9 +204,87 @@ test('geometry: reject invalid model, 404 when absent', async () => {
   assert.equal((await fetch(base + `/api/venues/${v.body.id}/export?format=dxf`)).status, 404);
   const bad = await fetch(base + `/api/venues/${v.body.id}/geometry`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ surfaces: [{ name: 'bad', vertices: [[0, 0]] }] }),
+    body: JSON.stringify({ consent: true, surfaces: [{ name: 'bad', vertices: [[0, 0]] }] }),
   });
   assert.equal(bad.status, 422);
+});
+
+test('upload requires contribution consent', async () => {
+  const v = await jpost('/api/venues', { name: 'Consent Hall' });
+  const noConsent = await jpost(`/api/venues/${v.body.id}/files`, { filename: 'x.dbpr' });
+  assert.equal(noConsent.status, 422);
+  assert.match(noConsent.body.error, /right to share/i);
+  const ok = await jpost(`/api/venues/${v.body.id}/files`, { filename: 'x.dbpr', consent: true });
+  assert.equal(ok.status, 201);
+});
+
+test('duplicate detection: warns, then allows with confirm; alias search + merge', async () => {
+  const a = await jpost('/api/venues', { name: 'Wembley Stadium', city: 'London', country: 'United Kingdom' });
+  assert.equal(a.status, 201);
+
+  // a typo'd near-duplicate in the same city should be blocked (409) with candidates
+  const dup = await jpost('/api/venues', { name: 'Wembly Stadium', city: 'London', country: 'United Kingdom' });
+  assert.equal(dup.status, 409);
+  assert.ok(dup.body.duplicates.length >= 1);
+  assert.equal(dup.body.duplicates[0].id, a.body.id);
+
+  // the similar endpoint powers the live warning
+  const sim = await (await fetch(base + '/api/venues/similar?name=' + encodeURIComponent('Wembley Stadum') + '&country=United+Kingdom')).json();
+  assert.ok(sim.duplicates.length >= 1);
+
+  // confirm_duplicate lets a genuine second entry through (we'll merge it back)
+  const b = await jpost('/api/venues', { name: 'Wembley Stadium (old)', city: 'London', country: 'United Kingdom', confirm_duplicate: true });
+  assert.equal(b.status, 201);
+
+  // give b a file so we can prove merge moves content
+  const f = await jpost(`/api/venues/${b.body.id}/files`, { filename: 'legacy.dbpr', consent: true });
+  await fetch(base + f.body.uploadUrl, { method: 'POST', body: 'x' });
+
+  // admin merge b -> a
+  const merged = await jpost('/api/admin/merge', { source_id: b.body.id, target_id: a.body.id }, ADMIN);
+  assert.equal(merged.status, 200);
+  assert.equal(merged.body.id, a.body.id);
+
+  // b is gone, its file now lives on a, and b's name is an alias of a
+  assert.equal((await fetch(base + `/api/venues/${b.body.id}`)).status, 404);
+  const aDetail = await (await fetch(base + `/api/venues/${a.body.id}`)).json();
+  assert.equal(aDetail.file_count, 1);
+  assert.ok(aDetail.aliases.some((al) => al.alias === 'Wembley Stadium (old)' && al.kind === 'former'));
+
+  // searching the former name finds the surviving venue
+  const search = await (await fetch(base + '/api/venues?q=' + encodeURIComponent('Wembley Stadium (old)'))).json();
+  assert.ok(search.venues.some((v) => v.id === a.body.id));
+});
+
+test('fix requests: public submit, admin triage; admin needs a token', async () => {
+  const v = await jpost('/api/venues', { name: 'Fixme Arena' });
+
+  // public submit
+  const fix = await jpost(`/api/venues/${v.body.id}/fix-requests`, { type: 'correction', message: 'Capacity is wrong, should be 5000', reporter_name: 'Tech' });
+  assert.equal(fix.status, 201);
+
+  // admin endpoints reject without / with wrong token
+  assert.equal((await fetch(base + '/api/admin/fix-requests')).status, 401);
+  assert.equal((await fetch(base + '/api/admin/fix-requests', { headers: { 'X-Admin-Token': 'nope' } })).status, 401);
+
+  // admin lists and resolves
+  const open = await (await fetch(base + '/api/admin/fix-requests?status=open', { headers: ADMIN })).json();
+  assert.ok(open.fix_requests.length >= 1);
+  const target = open.fix_requests.find((r) => r.venue_id === v.body.id);
+  assert.equal(target.venue_name, 'Fixme Arena');
+  const resolved = await jpost(`/api/admin/fix-requests/${target.id}/resolve`, { status: 'resolved', admin_note: 'fixed' }, ADMIN);
+  assert.equal(resolved.status, 200);
+  assert.equal(resolved.body.status, 'resolved');
+});
+
+test('admin can hide a venue, removing it from public listings', async () => {
+  const v = await jpost('/api/venues', { name: 'Hide Me Hall', country: 'Testland' });
+  const before = await (await fetch(base + '/api/venues?q=Hide%20Me%20Hall')).json();
+  assert.equal(before.total, 1);
+  const hidden = await jpost(`/api/admin/venues/${v.body.id}/status`, { status: 'hidden' }, ADMIN);
+  assert.equal(hidden.status, 200);
+  const after = await (await fetch(base + '/api/venues?q=Hide%20Me%20Hall')).json();
+  assert.equal(after.total, 0);
 });
 
 test('unknown venue is 404', async () => {

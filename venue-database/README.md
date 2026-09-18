@@ -53,10 +53,18 @@ This project is that place — vendor-neutral, free, and community-governed.
   attribution + license note) instead of rehosting a proprietary binary.
 - **Star ratings + comments** on every file, with rolled-up averages shown per
   file and per venue.
-- **Search & filter** by name, city, country and venue type.
+- **Search & filter** by name, city, country and venue type (matches former
+  names / aliases too).
+- **Duplicate prevention** — canonical name keys + fuzzy matching warn before a
+  typo or variant creates a second entry; **aliases & merge** handle renames.
+- **Contribution consent** — a required tick box; nothing is ingested without
+  the contributor affirming they have the right to share it.
+- **Fix requests** — anyone can flag a correction, duplicate or name change.
+- **Maintenance panel** for the owner at `/admin` (token-protected): triage
+  reports, edit/hide/delete venues, add aliases, merge duplicates.
 - **Open JSON API** with permissive CORS, so other tools can build on the data.
-- **No accounts, no gate** — read and contribute freely. (Attribution name is
-  optional and self-reported.)
+- **No accounts, no gate** to read or contribute. (Attribution name is optional
+  and self-reported.)
 
 ## Quick start
 
@@ -86,6 +94,7 @@ npm test
 | `VDB_DATA_DIR`        | `./data`           | Where the SQLite DB + uploads go |
 | `VDB_DB_PATH`         | `<data>/venuedb.sqlite` | SQLite file path            |
 | `VDB_MAX_UPLOAD_BYTES`| `262144000` (250MB)| Per-file upload limit            |
+| `ADMIN_TOKEN`         | _(generated in dev)_ | Token for the `/admin` panel; set it in production |
 
 ## API
 
@@ -94,8 +103,9 @@ All responses are JSON. Base path `/api`.
 | Method & path                         | Description                                   |
 | ------------------------------------- | --------------------------------------------- |
 | `GET  /api/meta`                      | App config (app list, venue types) + stats    |
-| `GET  /api/venues?q=&country=&type=`  | Search / list venues (with rollup counts)     |
-| `POST /api/venues`                    | Create a venue                                |
+| `GET  /api/venues?q=&country=&type=`  | Search / list venues (matches aliases too)    |
+| `GET  /api/venues/similar?name=&city=&country=` | Likely-duplicate candidates (live warning) |
+| `POST /api/venues`                    | Create a venue (409 + `duplicates` if a match; `confirm_duplicate` to override) |
 | `GET  /api/venues/:id`                | Venue detail incl. its files                  |
 | `PUT  /api/venues/:id/geometry`       | Store/replace the neutral geometry model      |
 | `GET  /api/venues/:id/model`          | The neutral geometry model (JSON)             |
@@ -107,16 +117,18 @@ All responses are JSON. Base path `/api`.
 | `GET  /api/files/:id/content`         | Download the file                             |
 | `GET  /api/files/:id/reviews`         | List reviews for a file                       |
 | `POST /api/files/:id/reviews`         | Add a review `{ rating 1-5, comment, name }`  |
+| `POST /api/venues/:id/fix-requests`   | Report a correction / duplicate / name change |
+| `… /api/admin/*`                      | Maintenance (token) — see [docs/MODERATION-AND-ADMIN.md](docs/MODERATION-AND-ADMIN.md) |
 
 **Uploading is two steps** (keeps it binary-safe and dependency-free): create
-the file record with JSON metadata, then POST the raw bytes to the `uploadUrl`
-it returns.
+the file record with JSON metadata (including `consent: true`), then POST the raw
+bytes to the `uploadUrl` it returns.
 
 ```bash
 # 1. create metadata
 FID=$(curl -s -X POST localhost:4000/api/venues/VEN_ID/files \
   -H 'Content-Type: application/json' \
-  -d '{"filename":"main_pa.dbpro","application":"ArrayCalc","app_version":"11.2"}' \
+  -d '{"filename":"main_pa.dbpro","application":"ArrayCalc","app_version":"11.2","consent":true}' \
   | grep -o '"id": *"[^"]*"' | head -1 | cut -d'"' -f4)
 
 # 2. upload the bytes
@@ -135,6 +147,8 @@ venue-database/
 │   ├── repo.js       # data-access layer (all SQL lives here)
 │   ├── api.js        # JSON handlers + upload/download streaming, route table
 │   ├── geometry.js   # VenueBridge: neutral model + DXF/OBJ/JSON converters
+│   ├── naming.js     # name normalization + fuzzy duplicate matching
+│   ├── auth.js       # admin token auth
 │   ├── server.js     # http server, static serving, SPA fallback, CORS
 │   ├── seed-data.js  # venue dataset (facts)
 │   └── seed.js       # seeding + demo geometry/files
@@ -215,8 +229,12 @@ These are called out rather than hidden — see the roadmap.
 - [x] External-reference entries (link to official free resources, don't rehost).
 - [x] Seed dataset of ~30 real venues + per-brand file-format/source reference.
 - [x] VenueBridge conversion engine v0.1 — neutral geometry model → DXF/OBJ/JSON.
-- [ ] COLLADA `.dae` / glTF exporters; ingest DXF/SketchUp into the model.
+- [x] Duplicate prevention (name keys + fuzzy match), aliases & merge.
+- [x] Contribution consent tick box on ingest.
+- [x] Fix requests + token-protected maintenance panel (`/admin`).
+- [ ] COLLADA `.dae` / glTF exporters; ingest DXF/SketchUp into the model (with consent).
 - [ ] In-browser geometry editor + 3D preview.
+- [ ] Rate limiting, optional accounts, upload virus scanning, admin audit log.
 - [ ] Map view of venues (Leaflet + the stored lat/lng).
 - [ ] Venue edit history / versioning and file versions.
 - [ ] Report/flag + moderation queue and rate limiting.

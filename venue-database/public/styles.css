@@ -110,3 +110,6 @@ h1 { font-size: 1.6rem; margin: 0 0 4px; }
 h2 { font-size: 1.25rem; margin: 28px 0 10px; }
 .back { display: inline-block; margin-bottom: 12px; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.check { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: .9rem; margin-top: 8px; }
+.check input { width: auto; margin-top: 3px; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: .85em; }
