@@ -96,6 +96,14 @@ npm test
 | `VDB_MAX_UPLOAD_BYTES`| `262144000` (250MB)| Per-file upload limit            |
 | `ADMIN_TOKEN`         | _(generated in dev)_ | Token for the `/admin` panel; set it in production |
 
+### Hosting
+
+The Node app runs anywhere with a persistent disk (point `VDB_DATA_DIR` at it).
+The planned **free, zero-maintenance** deployment is Cloudflare Workers + D1 +
+R2 — see **[docs/HANDOFF-CLOUDFLARE.md](docs/HANDOFF-CLOUDFLARE.md)** for the full
+port spec and deploy runbook. Avoid ephemeral-disk hosts (Heroku / serverless /
+free tiers without a volume): SQLite + uploads won't survive a restart there.
+
 ## API
 
 All responses are JSON. Base path `/api`.

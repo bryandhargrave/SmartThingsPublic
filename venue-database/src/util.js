@@ -1,13 +1,8 @@
-// Small, dependency-free HTTP + validation helpers.
+// Small HTTP + validation helpers for the Node server.
 import crypto from 'node:crypto';
+import { HttpError } from './errors.js';
 
-export class HttpError extends Error {
-  constructor(status, message, details) {
-    super(message);
-    this.status = status;
-    this.details = details;
-  }
-}
+export { HttpError };
 
 export function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(9).toString('base64url')}`;

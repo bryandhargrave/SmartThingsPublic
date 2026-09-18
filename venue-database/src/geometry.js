@@ -21,7 +21,7 @@
 //   "surfaces": [ { "name": "Main floor", "type": "audience",
 //                   "vertices": [ [x,y,z], [x,y,z], [x,y,z], ... ] }, ... ]
 // }
-import { HttpError } from './util.js';
+import { HttpError } from './errors.js';
 
 const SURFACE_TYPES = new Set(['audience', 'stage', 'wall', 'ceiling', 'floor', 'structure', 'other']);
 
