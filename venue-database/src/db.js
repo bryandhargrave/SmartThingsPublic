@@ -50,7 +50,11 @@ function migrate(database) {
       content_type  TEXT,
       sha256        TEXT,
       storage_path  TEXT,
-      -- 'pending' after metadata is created, 'ready' once bytes are stored.
+      -- For catalogued external resources (official free downloads) we store a
+      -- link instead of rehosting the bytes. NULL for normal uploads.
+      source_url    TEXT,
+      license_note  TEXT,
+      -- 'pending' -> awaiting bytes, 'ready' -> uploaded, 'reference' -> external link.
       status        TEXT NOT NULL DEFAULT 'pending',
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -69,4 +73,9 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_venues_country ON venues(country);
     CREATE INDEX IF NOT EXISTS idx_venues_name    ON venues(name);
   `);
+
+  // Additive migrations for databases created before these columns existed.
+  const fileCols = new Set(database.prepare('PRAGMA table_info(files)').all().map((c) => c.name));
+  if (!fileCols.has('source_url')) database.exec('ALTER TABLE files ADD COLUMN source_url TEXT');
+  if (!fileCols.has('license_note')) database.exec('ALTER TABLE files ADD COLUMN license_note TEXT');
 }

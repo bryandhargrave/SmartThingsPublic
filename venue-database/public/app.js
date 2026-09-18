@@ -139,6 +139,10 @@ async function renderVenue(id) {
 }
 
 function fileBlock(f) {
+  const isRef = f.status === 'reference';
+  const action = isRef
+    ? `<a class="btn" href="${esc(f.source_url)}" target="_blank" rel="noopener">↗ Open official source</a>`
+    : `<a class="btn" href="/api/files/${esc(f.id)}/content">⬇ Download</a>`;
   return `
     <div class="file-block" id="file-${esc(f.id)}">
       <div class="file-head">
@@ -146,13 +150,15 @@ function fileBlock(f) {
         <div>${stars(f.avg_rating)} <span class="muted small">(${f.review_count})</span></div>
       </div>
       <div class="badges" style="margin:6px 0">
+        ${isRef ? '<span class="badge" style="border-color:var(--primary);color:var(--primary)">external reference</span>' : ''}
         ${f.application ? `<span class="badge">${esc(f.application)}${f.app_version ? ` ${esc(f.app_version)}` : ''}</span>` : ''}
-        <span class="badge">${fmtBytes(f.size_bytes)}</span>
+        ${isRef ? '' : `<span class="badge">${fmtBytes(f.size_bytes)}</span>`}
         ${f.uploader_name ? `<span class="badge">by ${esc(f.uploader_name)}</span>` : ''}
       </div>
       ${f.description ? `<p class="small">${esc(f.description)}</p>` : ''}
+      ${isRef && f.license_note ? `<p class="small muted">License: ${esc(f.license_note)}</p>` : ''}
       <div class="row-actions">
-        <a class="btn" href="/api/files/${esc(f.id)}/content">⬇ Download</a>
+        ${action}
       </div>
 
       <div class="reviews">

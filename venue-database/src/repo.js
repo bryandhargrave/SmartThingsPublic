@@ -24,7 +24,7 @@ export function getVenue(id) {
   const db = getDb();
   const venue = db.prepare(`
     SELECT v.*,
-      (SELECT COUNT(*) FROM files f WHERE f.venue_id = v.id AND f.status = 'ready') AS file_count,
+      (SELECT COUNT(*) FROM files f WHERE f.venue_id = v.id AND f.status IN ('ready','reference')) AS file_count,
       (SELECT COUNT(*) FROM reviews r JOIN files f ON r.file_id = f.id WHERE f.venue_id = v.id) AS review_count,
       (SELECT ROUND(AVG(r.rating), 2) FROM reviews r JOIN files f ON r.file_id = f.id WHERE f.venue_id = v.id) AS avg_rating
     FROM venues v WHERE v.id = ?
@@ -47,7 +47,7 @@ export function listVenues({ q, country, type, limit = 50, offset = 0 } = {}) {
 
   const rows = db.prepare(`
     SELECT v.*,
-      (SELECT COUNT(*) FROM files f WHERE f.venue_id = v.id AND f.status = 'ready') AS file_count,
+      (SELECT COUNT(*) FROM files f WHERE f.venue_id = v.id AND f.status IN ('ready','reference')) AS file_count,
       (SELECT COUNT(*) FROM reviews r JOIN files f ON r.file_id = f.id WHERE f.venue_id = v.id) AS review_count,
       (SELECT ROUND(AVG(r.rating), 2) FROM reviews r JOIN files f ON r.file_id = f.id WHERE f.venue_id = v.id) AS avg_rating
     FROM venues v
@@ -73,6 +73,23 @@ export function createFile(venueId, input) {
   return getFile(id);
 }
 
+// Catalog an official external resource (a free manufacturer download, a public
+// dataset) as a link with attribution instead of rehosting the bytes.
+export function createReference(venueId, input) {
+  const db = getDb();
+  if (!getVenue(venueId)) throw new HttpError(404, 'Venue not found');
+  const id = newId('file');
+  db.prepare(`
+    INSERT INTO files (id, venue_id, filename, application, app_version, description,
+                       uploader_name, source_url, license_note, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reference')
+  `).run(
+    id, venueId, input.filename, input.application, input.app_version, input.description,
+    input.uploader_name, input.source_url, input.license_note,
+  );
+  return getFile(id);
+}
+
 export function getFile(id) {
   const db = getDb();
   const file = db.prepare(`
@@ -91,7 +108,7 @@ export function listFilesForVenue(venueId) {
       (SELECT COUNT(*) FROM reviews r WHERE r.file_id = f.id) AS review_count,
       (SELECT ROUND(AVG(r.rating), 2) FROM reviews r WHERE r.file_id = f.id) AS avg_rating
     FROM files f
-    WHERE f.venue_id = ? AND f.status = 'ready'
+    WHERE f.venue_id = ? AND f.status IN ('ready','reference')
     ORDER BY f.created_at DESC
   `).all(venueId);
 }
@@ -110,7 +127,7 @@ export function markFileReady(id, { size_bytes, content_type, sha256, storage_pa
 export function createReview(fileId, input) {
   const db = getDb();
   const file = getFile(fileId);
-  if (!file || file.status !== 'ready') throw new HttpError(404, 'File not found');
+  if (!file || (file.status !== 'ready' && file.status !== 'reference')) throw new HttpError(404, 'File not found');
   const id = newId('rev');
   db.prepare(`
     INSERT INTO reviews (id, file_id, rating, comment, reviewer_name)
@@ -134,7 +151,7 @@ export function listReviews(fileId) {
 export function stats() {
   const db = getDb();
   const venues = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
-  const files = db.prepare("SELECT COUNT(*) AS n FROM files WHERE status = 'ready'").get().n;
+  const files = db.prepare("SELECT COUNT(*) AS n FROM files WHERE status IN ('ready','reference')").get().n;
   const reviews = db.prepare('SELECT COUNT(*) AS n FROM reviews').get().n;
   const countries = db.prepare("SELECT COUNT(DISTINCT country) AS n FROM venues WHERE country IS NOT NULL AND country <> ''").get().n;
   return { venues, files, reviews, countries };

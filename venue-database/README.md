@@ -37,6 +37,8 @@ This project is that place — vendor-neutral, free, and community-governed.
 - **File uploads** attached to a venue, tagged with the source application and
   version. Binary-safe — any project format is stored byte-for-byte, with a
   SHA-256 recorded for integrity.
+- **External references** — catalog an officially-free resource as a link (with
+  attribution + license note) instead of rehosting a proprietary binary.
 - **Star ratings + comments** on every file, with rolled-up averages shown per
   file and per venue.
 - **Search & filter** by name, city, country and venue type.
@@ -84,6 +86,7 @@ All responses are JSON. Base path `/api`.
 | `POST /api/venues`                    | Create a venue                                |
 | `GET  /api/venues/:id`                | Venue detail incl. its files                  |
 | `POST /api/venues/:id/files`          | Create file metadata → returns `uploadUrl`    |
+| `POST /api/venues/:id/references`     | Catalog an external resource by link          |
 | `POST /api/files/:id/content`         | Upload the raw file bytes (any content-type)  |
 | `GET  /api/files/:id`                 | File metadata incl. its reviews               |
 | `GET  /api/files/:id/content`         | Download the file                             |
@@ -156,6 +159,27 @@ The project is deliberately built to *stay* open:
 Manufacturer venue libraries and client-confidential designs may be restricted —
 when in doubt, upload your *own* work.
 
+## Seeding & where files come from
+
+`npm run seed` loads ~30 real, notable venues worldwide (factual public data:
+name, location, capacity, acoustic notes) plus a couple of clearly-labelled
+*demo* files so the ratings/reviews UI has something to show.
+
+It deliberately does **not** pre-stock the database with manufacturer venue
+files. Research across every major brand (d&b, L-Acoustics, Meyer, Martin Audio,
+Adamson, NEXO, JBL/Harman, EAW, Bose, RCF, EV, Danley…) confirmed that **no brand
+publishes a freely-redistributable venue/room project corpus** — those libraries
+live inside proprietary software behind logins, and rehosting them would infringe.
+What the brands publish free is the *prediction software* and *GLL loudspeaker
+box data* (AFMG-signed, "for use within AFMG software"), neither of which is a
+redistributable venue file.
+
+So the catalog grows the way NEXO's own *NS-1 Venue File Submission* program does:
+techs contribute designs **they own**, plus curated **links** to official free
+resources. See **[docs/FILE-FORMATS-AND-SOURCES.md](docs/FILE-FORMATS-AND-SOURCES.md)**
+for the per-brand breakdown of software, file extensions, free downloads and
+licensing — a map for what can and can't be shared.
+
 ## Moderation & abuse
 
 The MVP is intentionally open. Before a public launch you'll want:
@@ -171,6 +195,8 @@ These are called out rather than hidden — see the roadmap.
 
 ## Roadmap
 
+- [x] External-reference entries (link to official free resources, don't rehost).
+- [x] Seed dataset of ~30 real venues + per-brand file-format/source reference.
 - [ ] Map view of venues (Leaflet + the stored lat/lng).
 - [ ] Venue edit history / versioning and file versions.
 - [ ] Report/flag + moderation queue and rate limiting.

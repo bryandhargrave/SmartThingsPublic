@@ -117,6 +117,36 @@ test('rejects invalid rating', async () => {
   assert.equal(bad.status, 422);
 });
 
+test('external reference: catalogued as a link, download redirects', async () => {
+  const v = await jpost('/api/venues', { name: 'Reference Venue' });
+  const ref = await jpost(`/api/venues/${v.body.id}/references`, {
+    filename: 'EASE Focus 3 (official free download)',
+    application: 'EASE / EASE Focus',
+    source_url: 'https://example.com/official-resource',
+    license_note: 'Vendor terms — verify before redistributing',
+  });
+  assert.equal(ref.status, 201);
+  assert.equal(ref.body.status, 'reference');
+  assert.equal(ref.body.source_url, 'https://example.com/official-resource');
+
+  // reference requires a source_url
+  const bad = await jpost(`/api/venues/${v.body.id}/references`, { filename: 'no url' });
+  assert.equal(bad.status, 422);
+
+  // download endpoint redirects to the official source (no rehosted bytes)
+  const dl = await fetch(base + `/api/files/${ref.body.id}/content`, { redirect: 'manual' });
+  assert.equal(dl.status, 302);
+  assert.equal(dl.headers.get('location'), 'https://example.com/official-resource');
+
+  // reviews work on references too
+  assert.equal((await jpost(`/api/files/${ref.body.id}/reviews`, { rating: 4 })).status, 201);
+
+  // it appears in the venue's file list
+  const venueAfter = await (await fetch(base + `/api/venues/${v.body.id}`)).json();
+  assert.equal(venueAfter.file_count, 1);
+  assert.equal(venueAfter.files[0].status, 'reference');
+});
+
 test('unknown venue is 404', async () => {
   const res = await fetch(base + '/api/venues/ven_missing');
   assert.equal(res.status, 404);

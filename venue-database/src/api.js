@@ -72,6 +72,20 @@ async function createFile(req, res, params) {
   sendJson(res, 201, { ...file, uploadUrl: `/api/files/${file.id}/content` });
 }
 
+async function createReference(req, res, params) {
+  const body = await readJsonBody(req);
+  const ref = repo.createReference(params.id, {
+    filename: str(body.filename, { field: 'filename', required: true, min: 1, max: 260 }),
+    application: str(body.application, { field: 'application', max: 80 }),
+    app_version: str(body.app_version, { field: 'app_version', max: 60 }),
+    description: str(body.description, { field: 'description', max: 3000 }),
+    uploader_name: str(body.uploader_name, { field: 'uploader_name', max: 120 }),
+    source_url: str(body.source_url, { field: 'source_url', required: true, max: 1000 }),
+    license_note: str(body.license_note, { field: 'license_note', max: 500 }),
+  });
+  sendJson(res, 201, ref);
+}
+
 async function uploadFileContent(req, res, params) {
   const file = repo.getFile(params.id);
   if (!file) throw new HttpError(404, 'File not found');
@@ -128,7 +142,14 @@ async function getFile(req, res, params) {
 
 async function downloadFile(req, res, params) {
   const file = repo.getFile(params.id);
-  if (!file || file.status !== 'ready' || !file.storage_path || !fs.existsSync(file.storage_path)) {
+  if (!file) throw new HttpError(404, 'File content not available');
+  // Catalogued external resources redirect to the official source.
+  if (file.status === 'reference' && file.source_url) {
+    res.writeHead(302, { Location: file.source_url });
+    res.end();
+    return;
+  }
+  if (file.status !== 'ready' || !file.storage_path || !fs.existsSync(file.storage_path)) {
     throw new HttpError(404, 'File content not available');
   }
   // Guard against a stored path that escaped the upload directory.
@@ -171,6 +192,7 @@ export const routes = [
   { method: 'POST', pattern: /^\/api\/venues$/, handler: createVenue },
   { method: 'GET', pattern: /^\/api\/venues\/(?<id>[^/]+)$/, handler: getVenue },
   { method: 'POST', pattern: /^\/api\/venues\/(?<id>[^/]+)\/files$/, handler: createFile },
+  { method: 'POST', pattern: /^\/api\/venues\/(?<id>[^/]+)\/references$/, handler: createReference },
   { method: 'POST', pattern: /^\/api\/files\/(?<id>[^/]+)\/content$/, handler: uploadFileContent },
   { method: 'GET', pattern: /^\/api\/files\/(?<id>[^/]+)\/content$/, handler: downloadFile },
   { method: 'GET', pattern: /^\/api\/files\/(?<id>[^/]+)\/reviews$/, handler: listReviews },

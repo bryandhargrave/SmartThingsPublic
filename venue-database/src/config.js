@@ -24,10 +24,13 @@ export const KNOWN_APPLICATIONS = [
   'ArrayCalc',              // d&b audiotechnik
   'Soundvision',            // L-Acoustics
   'MAPP 3D',                // Meyer Sound
-  'EASE',                   // AFMG
-  'Modeler',                // Bose
+  'DISPLAY 3',              // Martin Audio
+  'Blueprint AV',           // Adamson
+  'NS-1',                   // NEXO
+  'EASE / EASE Focus',      // AFMG
+  'GLL / Loudspeaker data', // AFMG GLL box data
+  'Modeler',                // Bose Professional
   'Smaart',                 // Rational Acoustics
-  'GLL / Loudspeaker data', // AFMG GLL
   'Other',
 ];
 
