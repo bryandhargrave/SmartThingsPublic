@@ -1,0 +1,10 @@
+# Runtime data — the crowd-sourced DB and uploaded files are generated locally
+# and must not be committed.
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Node
+node_modules/
+npm-debug.log*

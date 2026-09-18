@@ -1,0 +1,16 @@
+{
+  "name": "venue-database",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open, crowd-sourced database of concert venues and entertainment facilities with audio-tech design files (ArrayCalc, Soundvision, MAPP 3D, EASE ...), star ratings and comments.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite src/server.js",
+    "seed": "node --experimental-sqlite src/seed.js",
+    "test": "node --experimental-sqlite --test"
+  }
+}
