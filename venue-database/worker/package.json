@@ -1,0 +1,13 @@
+{
+  "name": "venuebridge-worker",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker (D1 + R2) port of the VenueBridge venue database API + SPA.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

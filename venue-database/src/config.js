@@ -18,33 +18,6 @@ export const HOST = process.env.HOST || '0.0.0.0';
 // few MB, but exported measurement sets and GLL data can get large.
 export const MAX_UPLOAD_BYTES = Number(process.env.VDB_MAX_UPLOAD_BYTES || 250 * 1024 * 1024);
 
-// Known design / measurement applications. Free text is also accepted so the
-// list never blocks a submission for an app we have not enumerated yet.
-export const KNOWN_APPLICATIONS = [
-  'ArrayCalc',              // d&b audiotechnik
-  'Soundvision',            // L-Acoustics
-  'MAPP 3D',                // Meyer Sound
-  'DISPLAY 3',              // Martin Audio
-  'Blueprint AV',           // Adamson
-  'NS-1',                   // NEXO
-  'EASE / EASE Focus',      // AFMG
-  'GLL / Loudspeaker data', // AFMG GLL box data
-  'Modeler',                // Bose Professional
-  'Smaart',                 // Rational Acoustics
-  'Other',
-];
-
-export const VENUE_TYPES = [
-  'Arena',
-  'Stadium',
-  'Amphitheater',
-  'Theater',
-  'Concert Hall',
-  'Club / Live Music',
-  'Ballroom',
-  'Convention Center',
-  'House of Worship',
-  'Outdoor Festival Site',
-  'Corporate / AV',
-  'Other',
-];
+// App list + venue types live in a pure module so the Cloudflare Worker can
+// reuse them without importing this node:path-bound file.
+export { KNOWN_APPLICATIONS, VENUE_TYPES } from './catalog.js';

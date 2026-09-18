@@ -1,0 +1,22 @@
+name = "venuebridge"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+# Serve the SPA in ../public; fall back to index.html for client (hash) routes.
+[assets]
+directory = "../public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "venuebridge"
+database_id = "9997a6e8-fe1c-4790-b9dd-864eee8896a7"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "venuebridge-uploads"
+
+[vars]
+MAX_UPLOAD_BYTES = "104857600"   # 100 MB (Worker memory ~128 MB; see README)
+# ADMIN_TOKEN is a secret, not a var — set with: wrangler secret put ADMIN_TOKEN
