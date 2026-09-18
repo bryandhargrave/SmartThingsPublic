@@ -1,15 +1,24 @@
-# 🎚️ Venue Database
+# 🎚️ VenueBridge — Venue Database
 
 An **open, free, ungated** database of concert venues and entertainment
 facilities worldwide — crowd-sourced by audio system techs.
 
-Think of the venue library inside **d&b ArrayCalc**, but public: anyone can
-browse it, download from it, and contribute to it without an account or a
-paywall. Techs upload the artifacts they actually work with — **ArrayCalc**,
-**L-Acoustics Soundvision**, **Meyer MAPP 3D**, **EASE**, **GLL** data,
-measurement exports — attached to a venue, and every file can be reviewed with
-**star ratings and comments** so the community can tell a battle-tested design
-from a first guess.
+Think of the venue library inside **d&b ArrayCalc**, but public and
+vendor-neutral: anyone can browse it, download from it, and contribute to it
+without an account or a paywall.
+
+**The core idea — VenueBridge.** Turn up to a gig with no venue file for the
+room? Find the venue here and **grab its geometry converted to the format your
+prediction software imports** (DXF today; OBJ and the neutral JSON too), then
+build your design in your own tool. Rather than rehosting proprietary native
+files (which are locked and can't legally be transcoded), VenueBridge stores each
+room as an **open geometry model** and bridges it into ArrayCalc, Soundvision,
+MAPP 3D, DISPLAY 3, SketchUp, and more. See
+**[docs/VENUEBRIDGE.md](docs/VENUEBRIDGE.md)**.
+
+Techs can also upload the artifacts they work with (files **they own**), and
+every file can be reviewed with **star ratings and comments** so the community
+can tell a battle-tested design from a first guess.
 
 This repository contains a **working reference implementation** (a small
 full-stack web app) plus the product/data model it's built on. It runs with
@@ -32,6 +41,9 @@ This project is that place — vendor-neutral, free, and community-governed.
 
 ## Features
 
+- **VenueBridge conversion engine** — store a room as an open geometry model and
+  export it to **DXF** (universal / SketchUp), **OBJ** (3D), or neutral **JSON**
+  for import into any prediction tool. See [docs/VENUEBRIDGE.md](docs/VENUEBRIDGE.md).
 - **Venues** with location (incl. GPS), type, capacity, website and free-form
   notes on acoustics/rigging quirks.
 - **File uploads** attached to a venue, tagged with the source application and
@@ -85,6 +97,9 @@ All responses are JSON. Base path `/api`.
 | `GET  /api/venues?q=&country=&type=`  | Search / list venues (with rollup counts)     |
 | `POST /api/venues`                    | Create a venue                                |
 | `GET  /api/venues/:id`                | Venue detail incl. its files                  |
+| `PUT  /api/venues/:id/geometry`       | Store/replace the neutral geometry model      |
+| `GET  /api/venues/:id/model`          | The neutral geometry model (JSON)             |
+| `GET  /api/venues/:id/export?format=` | Convert geometry → `dxf` \| `obj` \| `json`   |
 | `POST /api/venues/:id/files`          | Create file metadata → returns `uploadUrl`    |
 | `POST /api/venues/:id/references`     | Catalog an external resource by link          |
 | `POST /api/files/:id/content`         | Upload the raw file bytes (any content-type)  |
@@ -115,12 +130,14 @@ curl -s -X POST "localhost:4000/api/files/$FID/content" \
 ```
 venue-database/
 ├── src/
-│   ├── config.js   # env-driven config, known apps & venue types
-│   ├── db.js       # node:sqlite bootstrap + schema/migrations
-│   ├── repo.js     # data-access layer (all SQL lives here)
-│   ├── api.js      # JSON handlers + upload/download streaming, route table
-│   ├── server.js   # http server, static serving, SPA fallback, CORS
-│   └── seed.js     # sample data
+│   ├── config.js     # env-driven config, known apps & venue types
+│   ├── db.js         # node:sqlite bootstrap + schema/migrations
+│   ├── repo.js       # data-access layer (all SQL lives here)
+│   ├── api.js        # JSON handlers + upload/download streaming, route table
+│   ├── geometry.js   # VenueBridge: neutral model + DXF/OBJ/JSON converters
+│   ├── server.js     # http server, static serving, SPA fallback, CORS
+│   ├── seed-data.js  # venue dataset (facts)
+│   └── seed.js       # seeding + demo geometry/files
 ├── public/         # vanilla-JS single-page frontend (no build step)
 │   ├── index.html
 │   ├── styles.css
@@ -197,6 +214,9 @@ These are called out rather than hidden — see the roadmap.
 
 - [x] External-reference entries (link to official free resources, don't rehost).
 - [x] Seed dataset of ~30 real venues + per-brand file-format/source reference.
+- [x] VenueBridge conversion engine v0.1 — neutral geometry model → DXF/OBJ/JSON.
+- [ ] COLLADA `.dae` / glTF exporters; ingest DXF/SketchUp into the model.
+- [ ] In-browser geometry editor + 3D preview.
 - [ ] Map view of venues (Leaflet + the stored lat/lng).
 - [ ] Venue edit history / versioning and file versions.
 - [ ] Report/flag + moderation queue and rate limiting.

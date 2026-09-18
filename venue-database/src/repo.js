@@ -10,14 +10,29 @@ export function createVenue(input) {
   const id = newId('ven');
   db.prepare(`
     INSERT INTO venues (id, name, type, address, city, region, country,
-                        latitude, longitude, capacity, website, description, submitted_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        latitude, longitude, capacity, website, description, submitted_by, geometry)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, input.name, input.type, input.address, input.city, input.region, input.country,
     input.latitude, input.longitude, input.capacity, input.website, input.description,
-    input.submitted_by,
+    input.submitted_by, input.geometry ?? null,
   );
   return getVenue(id);
+}
+
+// Store the vendor-neutral geometry model (already-validated JSON string).
+export function setGeometry(id, jsonString) {
+  const db = getDb();
+  if (!getVenue(id)) throw new HttpError(404, 'Venue not found');
+  db.prepare("UPDATE venues SET geometry = ?, updated_at = datetime('now') WHERE id = ?").run(jsonString, id);
+  return getVenue(id);
+}
+
+export function getGeometry(id) {
+  const db = getDb();
+  const row = db.prepare('SELECT geometry FROM venues WHERE id = ?').get(id);
+  if (!row) return undefined; // venue missing
+  return row.geometry ? JSON.parse(row.geometry) : null; // null = no geometry yet
 }
 
 export function getVenue(id) {
@@ -29,7 +44,15 @@ export function getVenue(id) {
       (SELECT ROUND(AVG(r.rating), 2) FROM reviews r JOIN files f ON r.file_id = f.id WHERE f.venue_id = v.id) AS avg_rating
     FROM venues v WHERE v.id = ?
   `).get(id);
-  return venue || null;
+  if (!venue) return null;
+  return withGeometryFlag(venue);
+}
+
+// Replace the raw geometry blob with a lightweight boolean flag on API objects.
+function withGeometryFlag(venue) {
+  venue.has_geometry = !!(venue.geometry && venue.geometry.length);
+  delete venue.geometry;
+  return venue;
 }
 
 export function listVenues({ q, country, type, limit = 50, offset = 0 } = {}) {
@@ -57,7 +80,7 @@ export function listVenues({ q, country, type, limit = 50, offset = 0 } = {}) {
   `).all(...params, limit, offset);
 
   const total = db.prepare(`SELECT COUNT(*) AS n FROM venues v ${whereSql}`).get(...params).n;
-  return { venues: rows, total, limit, offset };
+  return { venues: rows.map(withGeometryFlag), total, limit, offset };
 }
 
 // ---- files -----------------------------------------------------------------
@@ -154,5 +177,6 @@ export function stats() {
   const files = db.prepare("SELECT COUNT(*) AS n FROM files WHERE status IN ('ready','reference')").get().n;
   const reviews = db.prepare('SELECT COUNT(*) AS n FROM reviews').get().n;
   const countries = db.prepare("SELECT COUNT(DISTINCT country) AS n FROM venues WHERE country IS NOT NULL AND country <> ''").get().n;
-  return { venues, files, reviews, countries };
+  const models = db.prepare("SELECT COUNT(*) AS n FROM venues WHERE geometry IS NOT NULL AND geometry <> ''").get().n;
+  return { venues, files, reviews, countries, models };
 }

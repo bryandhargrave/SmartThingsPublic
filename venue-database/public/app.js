@@ -65,6 +65,7 @@ async function renderBrowse() {
   app.innerHTML = `
     <div class="stats">
       <div class="stat"><b>${s.venues}</b><span>Venues</span></div>
+      <div class="stat"><b>${s.models ?? 0}</b><span>Convertible</span></div>
       <div class="stat"><b>${s.files}</b><span>Files</span></div>
       <div class="stat"><b>${s.reviews}</b><span>Reviews</span></div>
       <div class="stat"><b>${s.countries}</b><span>Countries</span></div>
@@ -99,6 +100,7 @@ function venueCard(v) {
         <div class="meta">${esc(locationLine(v)) || 'Location not specified'}${v.capacity ? ` · cap. ${v.capacity.toLocaleString()}` : ''}</div>
         <div class="badges">
           ${v.type ? `<span class="badge">${esc(v.type)}</span>` : ''}
+          ${v.has_geometry ? '<span class="badge" style="border-color:var(--primary);color:var(--primary)">geometry ⇄</span>' : ''}
           <span class="badge">${v.file_count} file${v.file_count === 1 ? '' : 's'}</span>
           <span class="badge">${v.review_count} review${v.review_count === 1 ? '' : 's'}</span>
         </div>
@@ -125,6 +127,19 @@ async function renderVenue(id) {
       ${v.description ? `<p>${esc(v.description)}</p>` : ''}
       ${v.submitted_by ? `<p class="muted small">Submitted by ${esc(v.submitted_by)}</p>` : ''}
     </div>
+
+    ${v.has_geometry ? `
+    <h2>Get a venue file</h2>
+    <div class="card stack">
+      <div class="notice small">This venue has an open geometry model. Convert it to the format your prediction software imports, then build your design in your own tool. Coordinates are in metres; treat the model as a schematic starting point and verify against the real room.</div>
+      <div class="row-actions">
+        <a class="btn btn-primary" href="/api/venues/${esc(v.id)}/export?format=dxf">⬇ DXF (CAD / SketchUp / most tools)</a>
+        <a class="btn" href="/api/venues/${esc(v.id)}/export?format=obj">⬇ OBJ (3D)</a>
+        <a class="btn" href="/api/venues/${esc(v.id)}/export?format=json">⬇ JSON (neutral model)</a>
+        <a class="btn" href="/api/venues/${esc(v.id)}/model" target="_blank" rel="noopener">view model</a>
+      </div>
+      <p class="small muted">Import DXF into ArrayCalc, Soundvision, MAPP 3D, DISPLAY 3, Danley Direct, SketchUp Pro, AutoCAD, and more.</p>
+    </div>` : ''}
 
     <h2>Files (${v.files.length})</h2>
     <div id="files" class="stack">

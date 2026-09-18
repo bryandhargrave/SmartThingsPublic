@@ -40,6 +40,29 @@ const DEMO_FILES = {
   ],
 };
 
+// A deliberately simple, SCHEMATIC room model (metres): a raked-ish audience
+// plane, a stage, and a front-of-house point. Illustrative, not surveyed.
+function schematicRoom({ width, depth, stageDepth = 12, stageHeight = 1.4 }) {
+  const w = width / 2;
+  return {
+    units: 'meters',
+    origin: { note: 'SCHEMATIC placeholder geometry — origin at stage front centre. Verify against the real room.' },
+    surfaces: [
+      { name: 'Stage', type: 'stage', vertices: [[-w, 0, stageHeight], [w, 0, stageHeight], [w, stageDepth, stageHeight], [-w, stageDepth, stageHeight]] },
+      { name: 'Audience floor', type: 'audience', vertices: [[-w, stageDepth, 0], [w, stageDepth, 0], [w, depth, 0], [-w, depth, 0]] },
+    ],
+    points: [
+      { label: 'FOH', x: 0, y: depth * 0.68, z: 1.5 },
+      { label: 'Stage centre', x: 0, y: 0, z: stageHeight },
+    ],
+  };
+}
+
+const GEOMETRY = {
+  'Red Rocks Amphitheatre': schematicRoom({ width: 60, depth: 90, stageDepth: 14, stageHeight: 1.4 }),
+  'Ziggo Dome': schematicRoom({ width: 70, depth: 100, stageDepth: 16, stageHeight: 1.6 }),
+};
+
 function seed() {
   const db = getDb();
   const existing = db.prepare('SELECT COUNT(*) AS n FROM venues').get().n;
@@ -51,7 +74,11 @@ function seed() {
 
   const byName = {};
   for (const v of VENUES) {
-    const venue = repo.createVenue({ address: null, submitted_by: 'seed', ...v });
+    const geo = GEOMETRY[v.name];
+    const venue = repo.createVenue({
+      address: null, submitted_by: 'seed', ...v,
+      geometry: geo ? JSON.stringify(geo) : null,
+    });
     byName[v.name] = venue.id;
 
     for (const f of DEMO_FILES[v.name] || []) {
@@ -81,7 +108,7 @@ function seed() {
     repo.createReference(venueId, ref);
   }
 
-  console.log(`Seeded ${VENUES.length} venues, ${Object.keys(DEMO_FILES).length} demo file set(s), ${REFERENCES.length} reference(s).`);
+  console.log(`Seeded ${VENUES.length} venues (${Object.keys(GEOMETRY).length} with geometry), ${Object.keys(DEMO_FILES).length} demo file set(s), ${REFERENCES.length} reference(s).`);
 }
 
 seed();

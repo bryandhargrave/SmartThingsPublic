@@ -7,7 +7,12 @@ import { pipeline } from 'node:stream/promises';
 
 import { UPLOAD_DIR, MAX_UPLOAD_BYTES, KNOWN_APPLICATIONS, VENUE_TYPES } from './config.js';
 import { HttpError, readJsonBody, sendJson, str, num } from './util.js';
+import { normalizeModel, EXPORT_FORMATS } from './geometry.js';
 import * as repo from './repo.js';
+
+function slug(s) {
+  return String(s || 'venue').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'venue';
+}
 
 // ---- meta ------------------------------------------------------------------
 
@@ -46,8 +51,45 @@ async function createVenue(req, res) {
     website: str(body.website, { field: 'website', max: 300 }),
     description: str(body.description, { field: 'description', max: 5000 }),
     submitted_by: str(body.submitted_by, { field: 'submitted_by', max: 120 }),
+    geometry: body.geometry != null ? JSON.stringify(normalizeModel(body.geometry)) : null,
   });
   sendJson(res, 201, venue);
+}
+
+async function setGeometry(req, res, params) {
+  const body = await readJsonBody(req, { limit: 5_000_000 });
+  // Accept either { geometry: {...} } or the model object directly.
+  const raw = body && body.geometry !== undefined ? body.geometry : body;
+  const model = normalizeModel(raw);
+  const venue = repo.setGeometry(params.id, JSON.stringify(model));
+  sendJson(res, 200, venue);
+}
+
+async function getModel(req, res, params) {
+  const model = repo.getGeometry(params.id);
+  if (model === undefined) throw new HttpError(404, 'Venue not found');
+  if (model === null) throw new HttpError(404, 'This venue has no geometry model yet');
+  sendJson(res, 200, model);
+}
+
+async function exportGeometry(req, res, params, url) {
+  const venue = repo.getVenue(params.id);
+  if (!venue) throw new HttpError(404, 'Venue not found');
+  const model = repo.getGeometry(params.id);
+  if (!model) throw new HttpError(404, 'This venue has no geometry model to convert yet');
+
+  const fmt = (url.searchParams.get('format') || 'dxf').toLowerCase();
+  const spec = EXPORT_FORMATS[fmt];
+  if (!spec) throw new HttpError(400, `Unsupported format. Use one of: ${Object.keys(EXPORT_FORMATS).join(', ')}`);
+
+  const body = spec.convert(model);
+  const filename = `${slug(venue.name)}.${spec.ext}`;
+  res.writeHead(200, {
+    'Content-Type': spec.contentType,
+    'Content-Length': Buffer.byteLength(body),
+    'Content-Disposition': `attachment; filename="${filename}"`,
+  });
+  res.end(body);
 }
 
 async function getVenue(req, res, params) {
@@ -191,6 +233,10 @@ export const routes = [
   { method: 'GET', pattern: /^\/api\/venues$/, handler: listVenues },
   { method: 'POST', pattern: /^\/api\/venues$/, handler: createVenue },
   { method: 'GET', pattern: /^\/api\/venues\/(?<id>[^/]+)$/, handler: getVenue },
+  { method: 'GET', pattern: /^\/api\/venues\/(?<id>[^/]+)\/model$/, handler: getModel },
+  { method: 'GET', pattern: /^\/api\/venues\/(?<id>[^/]+)\/export$/, handler: exportGeometry },
+  { method: 'POST', pattern: /^\/api\/venues\/(?<id>[^/]+)\/geometry$/, handler: setGeometry },
+  { method: 'PUT', pattern: /^\/api\/venues\/(?<id>[^/]+)\/geometry$/, handler: setGeometry },
   { method: 'POST', pattern: /^\/api\/venues\/(?<id>[^/]+)\/files$/, handler: createFile },
   { method: 'POST', pattern: /^\/api\/venues\/(?<id>[^/]+)\/references$/, handler: createReference },
   { method: 'POST', pattern: /^\/api\/files\/(?<id>[^/]+)\/content$/, handler: uploadFileContent },

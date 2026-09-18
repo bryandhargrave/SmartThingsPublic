@@ -34,6 +34,8 @@ function migrate(database) {
       website      TEXT,
       description  TEXT,
       submitted_by TEXT,
+      -- Vendor-neutral geometry model (JSON) used by the conversion engine.
+      geometry     TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -78,4 +80,7 @@ function migrate(database) {
   const fileCols = new Set(database.prepare('PRAGMA table_info(files)').all().map((c) => c.name));
   if (!fileCols.has('source_url')) database.exec('ALTER TABLE files ADD COLUMN source_url TEXT');
   if (!fileCols.has('license_note')) database.exec('ALTER TABLE files ADD COLUMN license_note TEXT');
+
+  const venueCols = new Set(database.prepare('PRAGMA table_info(venues)').all().map((c) => c.name));
+  if (!venueCols.has('geometry')) database.exec('ALTER TABLE venues ADD COLUMN geometry TEXT');
 }

@@ -147,6 +147,64 @@ test('external reference: catalogued as a link, download redirects', async () =>
   assert.equal(venueAfter.files[0].status, 'reference');
 });
 
+test('geometry: store neutral model, convert to DXF/OBJ/JSON', async () => {
+  const model = {
+    units: 'meters',
+    origin: { note: 'test room' },
+    surfaces: [
+      { name: 'Floor', type: 'audience', vertices: [[-5, 5, 0], [5, 5, 0], [5, 20, 0], [-5, 20, 0]] },
+      { name: 'Stage', type: 'stage', vertices: [[-5, 0, 1], [5, 0, 1], [5, 5, 1]] },
+    ],
+    points: [{ label: 'FOH', x: 0, y: 15, z: 1.5 }],
+  };
+  const v = await jpost('/api/venues', { name: 'Geometry Hall' });
+  const set = await fetch(base + `/api/venues/${v.body.id}/geometry`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(model),
+  });
+  assert.equal(set.status, 200);
+  assert.equal((await set.json()).has_geometry, true);
+
+  // shows up as convertible on the venue + in stats
+  const venue = await (await fetch(base + `/api/venues/${v.body.id}`)).json();
+  assert.equal(venue.has_geometry, true);
+
+  // DXF export
+  const dxfRes = await fetch(base + `/api/venues/${v.body.id}/export?format=dxf`);
+  assert.equal(dxfRes.status, 200);
+  assert.match(dxfRes.headers.get('content-disposition'), /geometry-hall\.dxf/);
+  const dxf = await dxfRes.text();
+  assert.match(dxf, /^0\r?\nSECTION/);         // starts with a SECTION
+  assert.match(dxf, /3DFACE/);                  // faces emitted
+  assert.match(dxf, /\nEOF\n$/);                // proper DXF terminator
+  // quad -> 2 triangles, triangle -> 1 triangle = 3 faces
+  assert.equal((dxf.match(/3DFACE/g) || []).length, 3);
+  assert.match(dxf, /\nFOH\n/);                 // point label text
+
+  // OBJ export
+  const obj = await (await fetch(base + `/api/venues/${v.body.id}/export?format=obj`)).text();
+  assert.match(obj, /^# VenueBridge export/);
+  assert.match(obj, /\nf 1 2 3 4\n/);           // quad face, 1-indexed
+
+  // JSON model round-trips through normalization
+  const jsonModel = await (await fetch(base + `/api/venues/${v.body.id}/model`)).json();
+  assert.equal(jsonModel.surfaces.length, 2);
+  assert.equal(jsonModel.points[0].label, 'FOH');
+
+  // unsupported format is rejected
+  assert.equal((await fetch(base + `/api/venues/${v.body.id}/export?format=skp`)).status, 400);
+});
+
+test('geometry: reject invalid model, 404 when absent', async () => {
+  const v = await jpost('/api/venues', { name: 'No Geometry Yet' });
+  assert.equal((await fetch(base + `/api/venues/${v.body.id}/model`)).status, 404);
+  assert.equal((await fetch(base + `/api/venues/${v.body.id}/export?format=dxf`)).status, 404);
+  const bad = await fetch(base + `/api/venues/${v.body.id}/geometry`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ surfaces: [{ name: 'bad', vertices: [[0, 0]] }] }),
+  });
+  assert.equal(bad.status, 422);
+});
+
 test('unknown venue is 404', async () => {
   const res = await fetch(base + '/api/venues/ven_missing');
   assert.equal(res.status, 404);
