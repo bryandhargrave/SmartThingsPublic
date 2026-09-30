@@ -2,9 +2,17 @@
 daemon:
   name: FOH Translator          # advertised via mDNS as <name>._oscjson._tcp
   http: { port: 8010, host: 0.0.0.0 }   # OSCQuery + WebSocket + REST + /ui
-  osc: { port: 9000 }                   # normalized OSC/UDP endpoint (set false to disable)
+  osc:
+    port: 9000                          # normalized OSC/UDP endpoint (set false to disable)
+    allow: ["192.168.10.20"]            # with a PIN set, only these senders may write over OSC/UDP (OSC has no login);
+                                        # "192.168.10.*" and "*" are accepted. Reads and subscriptions are always allowed.
   mdns: true
   logLevel: info
+  auth:
+    pin: "2468"                 # PIN for the web page and API. Remove to run open (isolated network only).
+                                # A PIN set from the web page (Setup tab) is stored hashed and wins over this one.
+    readPublic: false           # true: OSCQuery clients may read without a PIN; writes always need one
+    tokenDays: 30               # a logged-in iPad stays logged in this long
   echoWindowMs: 1500            # how long a client write waits for the device to echo it
   batchMs: 8                    # coalesce shadow-state changes into batches this often (~120 Hz)
 

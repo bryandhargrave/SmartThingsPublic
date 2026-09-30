@@ -22,8 +22,12 @@ Usage:
   koine watch [pattern] [--url ...]    Stream value changes over WebSocket
   koine status [--url ...]
   koine rules  [--url ...]            List rules with fire counts
+  koine login <pin> [--url ...]       Get a token for get/set/watch (prints export KOINE_TOKEN=...)
+  koine pin <digits|off> [--current <pin>] [--token ...]   Set, change or remove the PIN
 
-Environment: KOINE_CONFIG (config path), KOINE_URL (daemon URL for get/set/watch)`);
+All remote commands accept --url and --token (or KOINE_URL / KOINE_TOKEN).
+
+Environment: KOINE_CONFIG (config path), KOINE_URL, KOINE_TOKEN`);
 }
 
 function arg(flag, def) { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : def; }
@@ -57,7 +61,7 @@ async function demo() {
   await Promise.all([x32.start(), scp.start(), sq.start(), rf.start()]);
   const port = Number(arg('--port', 8010));
   const daemon = new Daemon({
-    daemon: { name: 'koine demo', http: { port, host: '0.0.0.0' }, osc: { port: Number(arg('--osc', 9000)) }, mdns: arg('--mdns', 'true') !== 'false', logLevel: arg('--log', 'info') },
+    daemon: { name: 'koine demo', http: { port, host: '0.0.0.0' }, osc: { port: Number(arg('--osc', 9000)) }, mdns: arg('--mdns', 'true') !== 'false', logLevel: arg('--log', 'info'), auth: arg('--pin') ? { pin: arg('--pin') } : {} },
     devices: [
       { id: 'x32', name: 'FOH X32 (mock)', profile: 'behringer-x32', host: '127.0.0.1', port: x32.port, transport: { ping: { address: '/xinfo', intervalMs: 1000 } } },
       { id: 'cl5', name: 'Monitor CL5 (mock)', profile: 'yamaha-scp', host: '127.0.0.1', port: scp.port, include: ['/ch/*', '/main/*', '/dca/*', '/scene/*'] },
@@ -144,7 +148,8 @@ function baseUrl() { return (arg('--url', process.env.KOINE_URL || 'http://127.0
 function request(method, p, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(baseUrl() + p);
-    const req = http.request(u, { method, headers: { 'Content-Type': 'application/json' } }, (res) => {
+    const token = arg('--token', process.env.KOINE_TOKEN);
+    const req = http.request(u, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } }, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => { try { resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }); } catch (_) { resolve({ status: res.statusCode, body: data }); } });
@@ -177,6 +182,21 @@ async function status() {
   console.log(JSON.stringify(r.body, null, 2));
 }
 
+async function login() {
+  const pin = process.argv[3];
+  if (!pin) return usage();
+  const r = await request('POST', '/api/login', { pin, label: 'koine cli' });
+  if (!r.body || !r.body.ok) { console.error(r.body && r.body.error ? r.body.error : 'login failed'); process.exit(1); }
+  console.log(r.body.token ? `export KOINE_TOKEN=${r.body.token}` : 'no PIN configured on this Koine; nothing to log in to');
+}
+
+async function pin() {
+  const [next, current] = [process.argv[3], arg('--current')];
+  if (next === undefined) return usage();
+  const r = await request('POST', '/api/auth', { current, pin: next === 'off' ? null : next });
+  console.log(JSON.stringify(r.body));
+}
+
 async function rules() {
   const r = await request('GET', '/api/rules');
   for (const x of r.body) console.log(`${x.enabled ? ' ' : '-'} ${x.name.padEnd(40)} fires=${String(x.fires).padStart(4)}  ${x.lastFired ? new Date(x.lastFired).toISOString().slice(11, 19) : '        '}  when ${typeof x.when === 'string' ? x.when : JSON.stringify(x.when)}${x.lastError ? `  ERROR: ${x.lastError}` : ''}`);
@@ -188,7 +208,8 @@ function watch() {
   const crypto = require('crypto');
   const { parseFrame, clientFrame } = require('../src/northbound/ws');
   const key = crypto.randomBytes(16).toString('base64');
-  const req = http.request({ host: u.hostname, port: u.port, path: '/', headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': key, 'Sec-WebSocket-Version': '13' } });
+  const token = arg('--token', process.env.KOINE_TOKEN);
+  const req = http.request({ host: u.hostname, port: u.port, path: token ? `/?token=${encodeURIComponent(token)}` : '/', headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': key, 'Sec-WebSocket-Version': '13' } });
   req.on('upgrade', (res, socket, head) => {
     socket.write(clientFrame(0x1, Buffer.from(JSON.stringify({ COMMAND: 'FORMAT', DATA: 'json' }))));
     socket.write(clientFrame(0x1, Buffer.from(JSON.stringify({ COMMAND: 'LISTEN', DATA: pattern }))));
@@ -213,6 +234,6 @@ function watch() {
 }
 
 const cmd = process.argv[2];
-const commands = { start, demo, validate, tree, get, set, status, watch, rules };
+const commands = { start, demo, validate, tree, get, set, status, watch, rules, login, pin };
 if (!cmd || cmd === '-h' || cmd === '--help' || !commands[cmd]) { usage(); process.exit(cmd ? 2 : 0); }
 Promise.resolve(commands[cmd]()).catch((e) => { console.error(e.stack || e.message); process.exit(1); });

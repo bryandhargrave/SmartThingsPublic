@@ -41,7 +41,7 @@ another. It is zero-dependency Node.js: copy the folder, run `node`, nothing to 
 
 ```bash
 cd koine
-npm test          # 58 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
+npm test          # 64 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
 npm run demo      # four mock devices + example rules, UI at http://localhost:8010/ui
 ```
 
@@ -134,6 +134,7 @@ The same operations are available over REST for anything else that wants to prog
 | `GET /api/ui`, `PUT /api/ui` `{"pins": [...], "title": ...}` | the pinned page |
 | `GET /api/devices`, `POST /api/devices`, `DELETE /api/devices/:id` | devices |
 | `GET /api/paths` | every parameter with type, unit, range and role (for pickers) |
+| `GET /api/auth`, `POST /api/login` `{"pin"}`, `POST /api/logout`, `POST /api/auth` `{"current","pin"}` | PIN sessions and PIN changes |
 
 ![Rule editor on the iPad](docs/ui-rule-editor.png)
 
@@ -168,14 +169,31 @@ Ports to allow on a managed switch or firewall:
 | 51325/tcp | MIDI over TCP | Allen & Heath |
 | 2202/tcp | command strings | Shure receivers |
 
-There is no authentication on the northbound API yet: anyone who can reach the page can move a fader.
-Run it on the isolated control network, not on venue guest Wi-Fi.
+### PIN
+
+Remote access needs a PIN. Set it in the YAML (`daemon.auth.pin`), from the Setup tab on the web
+page, or with `koine pin 2468`. With a PIN set:
+
+- The web page shows a lock screen; a correct PIN logs that screen in for `tokenDays` (default 30).
+  Sessions are random tokens stored hashed on the host and survive restarts. Changing the PIN logs
+  every screen out.
+- Every HTTP and WebSocket request needs a session: the cookie the page sets, `Authorization: Bearer
+  <token>`, or `?token=<token>` for clients that cannot set headers. `koine login 2468` prints a token
+  for the CLI and scripts. Only the page itself, `?HOST_INFO` and the login endpoint stay open.
+- `readPublic: true` lets OSCQuery browsers read the tree without a PIN; writes always need one.
+- OSC over UDP has no login, so while a PIN is set only senders listed in `daemon.osc.allow` may
+  write (`"192.168.10.20"`, `"192.168.10.*"`, or `"*"`). Reads and subscriptions are always answered.
+- Five wrong PINs from one address lock that address out for a minute.
+
+Without a PIN everything is open and the Setup tab says so in yellow. That is acceptable only on an
+isolated control network. The PIN is not a substitute for network hygiene: it is not encrypted in
+transit, so keep the iPad on the control VLAN and off guest Wi-Fi.
 
 ## At the gig
 
 1. Plug the Koine host into the control VLAN. Start it: `node bin/koine.js start -c config/daemon.yaml`
    (or `npm run demo` with no gear, to show someone what it does).
-2. On the iPad, open `http://<host-ip>:8010/ui`. Add it to the home screen; it runs full-screen.
+2. On the iPad, open `http://<host-ip>:8010/ui`, enter the PIN, add it to the home screen; it runs full-screen.
 3. **Setup** tab: add each device by brand and IP. Green dot means Koine is talking to it.
 4. **Pinned** tab: Edit pins, add the handful of controls you want with you.
 5. **Rules** tab: New rule, pick an example, adjust the paths, Test, Add. It is live immediately.
@@ -284,7 +302,7 @@ src/profile/             profile loader/validator, placeholder expansion, scalin
 src/shadow/state.js      shadow state engine (cache, echo suppression, batching)
 src/rules/engine.js      rules engine (conditions, templates, actions, loop guards)
 src/drivers/             base, osc-udp, tcp-line, midi-tcp
-src/core/                Device (profile+driver+shadow), Daemon (orchestration, live editing), Store (persisted edits)
+src/core/                Device (profile+driver+shadow), Daemon (orchestration, live editing), Store (persisted edits), Auth (PIN sessions)
 src/northbound/          ws.js (RFC 6455), oscquery.js (HTTP/WS/REST), osc-server.js (UDP), mdns.js
 profiles/                vendor profiles
 tools/                   mock X32, Yamaha SCP, A&H SQ, Shure ULX-D (used by tests and `demo`)
@@ -297,4 +315,4 @@ test/                    node:test suites (unit + end-to-end)
 - Metering as a separate high-rate stream
 - Momentary events (console macro presses) and MIDI output for devices that only listen on a DIN port (Avid S6L events)
 - DiGiCo, Q-SYS, d&b R1, Meyer Galaxy, Lake, Ember+ and HiQnet profiles
-- Authentication on the northbound API (assumes an isolated show network)
+- TLS for the web page (the PIN travels in clear on the control VLAN today)

@@ -55,9 +55,15 @@ class OscQueryServer {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     try {
+      const auth = this.daemon.auth;
       if (pathname === '/ui' || pathname === '/ui/index.html' || 'HTML' in u.query) return this._serveUi(res);
-      if (pathname.startsWith('/api/')) return this._api(req, res, pathname, u);
       if ('HOST_INFO' in u.query) return json(res, this.hostInfo(req));
+      if (pathname === '/api/auth' || pathname === '/api/login' || pathname === '/api/logout') return this._authApi(req, res, pathname, u);
+      if (!auth.isAuthed(req, u.query)) {
+        const readOnly = req.method === 'GET' && !pathname.startsWith('/api/');
+        if (!(readOnly && auth.readPublic)) { res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer realm="koine"' }); return res.end(JSON.stringify({ error: 'PIN required', login: '/api/login' })); }
+      }
+      if (pathname.startsWith('/api/')) return this._api(req, res, pathname, u);
       if (req.method === 'POST') return this._postValue(req, res, pathname);
       if (req.method !== 'GET') { res.writeHead(405); return res.end(); }
       const node = this.buildTree(pathname);
@@ -74,6 +80,41 @@ class OscQueryServer {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+  }
+
+  _authApi(req, res, pathname, u) {
+    const auth = this.daemon.auth;
+    if (pathname === '/api/auth' && req.method === 'GET') return json(res, auth.status(req, u.query));
+    if (pathname === '/api/auth' && req.method === 'POST') {
+      // Set or change the PIN. Allowed without a session only while no PIN exists yet.
+      return readBody(req).then((body) => {
+        const b = JSON.parse(body || '{}');
+        if (auth.enabled() && !auth.isAuthed(req, u.query)) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'PIN required' })); }
+        auth.setPin(b.current, b.pin === undefined ? null : b.pin);
+        this.daemon.emit('configChanged', { what: 'auth' });
+        // Everyone is logged out after a PIN change; the caller gets a fresh session.
+        if (b.pin) { const r = auth.login(b.pin, req.socket.remoteAddress, 'pin-setter'); res.setHeader('Set-Cookie', auth.cookieHeader(r.token, r.exp)); return json(res, { ok: true, required: true, token: r.token }); }
+        res.setHeader('Set-Cookie', auth.clearCookieHeader());
+        return json(res, { ok: true, required: false });
+      }).catch((e) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); });
+    }
+    if (pathname === '/api/login' && req.method === 'POST') {
+      return readBody(req).then((body) => {
+        const b = JSON.parse(body || '{}');
+        if (!auth.enabled()) return json(res, { ok: true, required: false });
+        const r = auth.login(b.pin, req.socket.remoteAddress, b.label || req.headers['user-agent'] || '');
+        if (!r.ok) { this.log.warn(`login failed from ${req.socket.remoteAddress}: ${r.error}`); res.writeHead(r.retryInMs ? 429 : 401, { 'Content-Type': 'application/json', ...(r.retryInMs ? { 'Retry-After': String(Math.ceil(r.retryInMs / 1000)) } : {}) }); return res.end(JSON.stringify({ error: r.error, retryInMs: r.retryInMs })); }
+        this.log.info(`login from ${req.socket.remoteAddress} (${b.label || 'browser'})`);
+        res.setHeader('Set-Cookie', auth.cookieHeader(r.token, r.exp));
+        return json(res, { ok: true, token: r.token, exp: r.exp });
+      }).catch((e) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); });
+    }
+    if (pathname === '/api/logout' && req.method === 'POST') {
+      auth.logout(auth.tokenFrom(req, u.query));
+      res.setHeader('Set-Cookie', auth.clearCookieHeader());
+      return json(res, { ok: true });
+    }
+    res.writeHead(405); res.end();
   }
 
   _serveUi(res) {
@@ -214,6 +255,13 @@ class OscQueryServer {
 
   // ---------------------------------------------------------------- WebSocket
   _onUpgrade(req, socket, head) {
+    const u = url.parse(req.url, true);
+    if (!this.daemon.auth.isAuthed(req, u.query)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{"error":"PIN required"}');
+      socket.destroy();
+      this.log.debug(`websocket refused (no PIN session) from ${socket.remoteAddress}`);
+      return;
+    }
     const conn = ws.handleUpgrade(req, socket, head);
     if (!conn) return;
     const id = `ws:${this._nextId++}`;

@@ -10,6 +10,7 @@ const { OscUdpServer } = require('../northbound/osc-server');
 const { MdnsAdvertiser } = require('../northbound/mdns');
 const { RulesEngine } = require('../rules/engine');
 const { Store, newId } = require('./store');
+const { Auth } = require('./auth');
 const fs = require('fs');
 const yaml = require('../util/yaml');
 
@@ -34,6 +35,7 @@ class Daemon extends EventEmitter {
     this.startedAt = null;
     // Editable state (rules, pins, devices added from the UI) lives in the store and is merged on top of the config.
     this.store = new Store(storePath || this.config.storePath || null);
+    this.auth = new Auth({ config: this.config.daemon.auth || {}, store: this.store, log: this.log });
     for (const dc of this.config.devices) this.addDevice({ ...dc, source: 'config' });
     for (const dc of this.store.data.devices) {
       try { this.addDevice({ ...dc, source: 'store' }); } catch (e) { this.log.warn(`store device "${dc.id}" skipped: ${e.message}`); }
@@ -200,6 +202,7 @@ class Daemon extends EventEmitter {
       devices: [...this.devices.values()].map((d) => d.status()),
       shadow: { nodes: this.shadow.nodes.size, pending: this.shadow.pending.size, ...this.shadow.stats },
       rules: { count: this.rules.rules.length, ...this.rules.stats },
+      auth: { required: this.auth.enabled(), sessions: this.store.data.auth.tokens.length },
       clients: this.http ? this.http.clientCount() : 0,
     };
   }

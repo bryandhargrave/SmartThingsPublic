@@ -82,6 +82,13 @@
   .help ol { margin:6px 0 0 18px; padding:0; }
   .help li { margin:4px 0; }
   .meta { font-size:12px; color:var(--dim); margin-top:4px; }
+  .lock { position:fixed; inset:0; background:var(--bg); z-index:20; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .lock .box { width:min(360px,100%); background:var(--panel); border-radius:18px; padding:24px; text-align:center; }
+  .lock h2 { margin:0 0 6px; font-size:16px; letter-spacing:0; text-transform:none; color:var(--fg); }
+  .lock p { color:var(--dim); font-size:13px; margin:0 0 16px; }
+  .lock input { width:100%; text-align:center; font-size:28px; letter-spacing:.4em; padding:12px; border-radius:12px; border:1px solid #2a2f39; background:var(--panel2); color:var(--fg); -webkit-user-select:text; user-select:text; }
+  .lock .err { color:var(--bad); font-size:13px; min-height:18px; margin:8px 0; }
+  .lock button { width:100%; margin-top:6px; padding:14px; font-size:16px; }
   .toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#2a2f39; color:#fff; padding:10px 16px; border-radius:10px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.show { opacity:1; }
   select { padding:8px 10px; border-radius:10px; background:var(--panel2); color:var(--fg); border:1px solid #2a2f39; font-size:14px; }
@@ -107,7 +114,36 @@
 
   // ---------------------------------------------------------------- connection
   let backoff = 500;
-  function connect() {
+  state.auth = { required: false, authenticated: true };
+  async function checkAuth() {
+    try { state.auth = await (await fetch('/api/auth')).json(); } catch (_) { state.auth = { required: false, authenticated: true }; }
+    return state.auth;
+  }
+  function lockScreen(msg) {
+    let el = document.getElementById('lock');
+    if (!el) {
+      el = document.createElement('div'); el.id = 'lock'; el.className = 'lock';
+      el.innerHTML = `<div class="box"><h2>Koine</h2><p>Enter the PIN to control this system.</p><input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="12" placeholder="••••"><div class="err" id="pinerr"></div><button class="btn primary" id="pingo">Unlock</button></div>`;
+      document.body.appendChild(el);
+      const go = async () => {
+        const pin = el.querySelector('#pin').value;
+        el.querySelector('#pinerr').textContent = '';
+        try {
+          const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin, label: navigator.userAgent.includes('iPad') ? 'iPad' : 'browser' }) });
+          const j = await r.json();
+          if (!r.ok) { el.querySelector('#pinerr').textContent = j.error || 'wrong PIN'; el.querySelector('#pin').value = ''; return; }
+          el.remove(); state.auth.authenticated = true; connect();
+        } catch (e) { el.querySelector('#pinerr').textContent = e.message; }
+      };
+      el.querySelector('#pingo').onclick = go;
+      el.querySelector('#pin').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      setTimeout(() => el.querySelector('#pin').focus(), 50);
+    }
+    if (msg) el.querySelector('#pinerr').textContent = msg;
+  }
+  async function connect() {
+    const a = await checkAuth();
+    if (a.required && !a.authenticated) { setLink(false, 'locked'); lockScreen(); return; }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/`);
     state.ws = ws;
@@ -123,7 +159,7 @@
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       switch (msg.COMMAND) {
-        case 'HELLO': state.id = msg.DATA.id; state.devices = msg.DATA.devices; renderDevices(); setLink(true, `live · ${state.id}`); break;
+        case 'HELLO': state.id = msg.DATA.id; state.devices = msg.DATA.devices; renderDevices(); setLink(true, `live · ${state.id}${state.auth.required ? ' 🔒' : ''}`); break;
         case 'SNAPSHOT': for (const n of msg.DATA) mergeNode(n); render(); break;
         case 'VALUES': case 'SNAPSHOT_VALUES': for (const n of msg.DATA) { mergeNode(n); updateNode(n.path); } break;
         case 'TREE': state.tree = msg.DATA; buildNav(); render(); break;
@@ -137,6 +173,7 @@
           break;
         }
         case 'CONFIG_CHANGED': {
+          if (msg.DATA.what === 'auth') { checkAuth().then(() => { if (state.view === 'setup') render(); }); break; }
           state.ui = { ...state.ui, ...msg.DATA.ui }; state.rules = msg.DATA.rules; state.devices = msg.DATA.devices;
           if (msg.DATA.what === 'device') { state.ws.send(JSON.stringify({ COMMAND: 'TREE', DATA: '/' })); state.ws.send(JSON.stringify({ COMMAND: 'SNAPSHOT', DATA: '/' })); }
           renderDevices(); buildNav(); render(); toast(`updated: ${msg.DATA.what}`);
@@ -147,12 +184,13 @@
         case 'ERROR': toast(msg.DATA); break;
       }
     };
-    ws.onclose = () => { setLink(false, 'reconnecting'); setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); };
+    ws.onclose = async () => { const a = await checkAuth(); if (a.required && !a.authenticated) { setLink(false, 'locked'); lockScreen('Session ended. Enter the PIN again.'); return; } setLink(false, 'reconnecting'); setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); };
     ws.onerror = () => ws.close();
   }
   async function api(method, path, body) {
     const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { state.auth.authenticated = false; lockScreen(); }
     if (!r.ok) throw new Error(j.error || r.statusText);
     return j;
   }
@@ -338,6 +376,21 @@
     add.onclick = () => { state.deviceForm = !state.deviceForm; render(); };
     bar.appendChild(add); main.appendChild(bar);
     if (state.deviceForm) main.appendChild(deviceForm());
+    const hs = document.createElement('h2'); hs.textContent = 'Security'; main.appendChild(hs);
+    const sec = document.createElement('div'); sec.className = 'help';
+    const req = state.auth.required;
+    sec.innerHTML = `<h3>${req ? 'PIN is on' : 'No PIN set'}</h3>${req ? `Anyone opening this page must enter the PIN. Logged-in screens stay logged in for ${state.auth.tokenDays || 30} days. Changing the PIN logs every screen out.` : '<span style="color:var(--warn)">Anyone on this network can open this page and move faders.</span> Set a PIN before the iPad leaves the booth.'}`;
+    const form = document.createElement('div'); form.className = 'row'; form.style.marginTop = '10px'; form.style.gap = '8px';
+    const cur = input('password', '', { placeholder: 'current PIN', inputMode: 'numeric' }); const nxt = input('password', '', { placeholder: req ? 'new PIN (4–12 digits)' : 'choose a PIN (4–12 digits)', inputMode: 'numeric' });
+    for (const el of [cur, nxt]) { el.style.padding = '10px 12px'; el.style.borderRadius = '10px'; el.style.border = '1px solid #2a2f39'; el.style.background = 'var(--panel2)'; el.style.color = 'var(--fg)'; el.style.fontSize = '15px'; el.style.flex = '1'; }
+    if (!req) cur.style.display = 'none';
+    const save = document.createElement('button'); save.className = 'btn primary'; save.textContent = req ? 'Change PIN' : 'Set PIN'; save.style.flex = '0 0 auto';
+    save.onclick = () => api('POST', '/api/auth', { current: cur.value, pin: nxt.value }).then(() => { toast(req ? 'PIN changed; other screens must log in again' : 'PIN set'); checkAuth().then(render); }).catch((e) => toast(e.message));
+    form.append(cur, nxt, save);
+    if (req) { const off = document.createElement('button'); off.className = 'btn danger'; off.textContent = 'Remove PIN'; off.style.flex = '0 0 auto'; off.onclick = () => { if (confirm('Remove the PIN? Anyone on the network will be able to control the system.')) api('POST', '/api/auth', { current: cur.value, pin: null }).then(() => { toast('PIN removed'); checkAuth().then(render); }).catch((e) => toast(e.message)); }; form.appendChild(off); }
+    sec.appendChild(form);
+    if (req) { const lo = document.createElement('button'); lo.className = 'btn small'; lo.textContent = 'Log this screen out'; lo.style.marginTop = '10px'; lo.onclick = () => fetch('/api/logout', { method: 'POST' }).then(() => location.reload()); sec.appendChild(lo); }
+    main.appendChild(sec);
     const h2 = document.createElement('h2'); h2.textContent = 'About'; main.appendChild(h2);
     const about = document.createElement('div'); about.className = 'log';
     about.innerHTML = `<div>Koine speaks every language on the show network. Edits made here are saved on the Koine host and shared with every connected screen.</div><div>OSCQuery / WebSocket: <b>${esc(location.host)}</b> · OSC/UDP for TouchOSC, QLab, Companion: see <b>/?HOST_INFO</b></div>`;

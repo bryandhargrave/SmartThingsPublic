@@ -69,6 +69,7 @@ class OscUdpServer {
       for (const n of nodes) this._send(encodeValue(n.path, n.value, n.def), rinfo);
       return;
     }
+    if (!this._mayWrite(rinfo)) { this.log.debug(`osc-server: write from ${key} refused (PIN set and sender not in daemon.osc.allow)`); return; }
     const value = pkt.args[0].value;
     if (isPattern) {
       const re = osc.patternToRegExp(pkt.address);
@@ -77,6 +78,13 @@ class OscUdpServer {
       const r = this.daemon.set(pkt.address, value, `udp:${key}`);
       if (!r.accepted) this.log.debug(`osc-server: ${pkt.address} rejected: ${r.reason}`);
     }
+  }
+
+  /** OSC has no login. When a PIN is configured, UDP senders may only write if listed in daemon.osc.allow. */
+  _mayWrite(rinfo) {
+    if (!this.daemon.auth || !this.daemon.auth.enabled()) return true;
+    const allow = (this.daemon.config.daemon.osc && this.daemon.config.daemon.osc.allow) || [];
+    return allow.some((a) => a === rinfo.address || (a.endsWith('.*') && rinfo.address.startsWith(a.slice(0, -1))) || a === '*');
   }
 
   _broadcast(changes) {
