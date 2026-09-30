@@ -1,0 +1,83 @@
+# koine daemon configuration. Copy to config/daemon.yaml and edit.
+daemon:
+  name: FOH Translator          # advertised via mDNS as <name>._oscjson._tcp
+  http: { port: 8010, host: 0.0.0.0 }   # OSCQuery + WebSocket + REST + /ui
+  osc: { port: 9000 }                   # normalized OSC/UDP endpoint (set false to disable)
+  mdns: true
+  logLevel: info
+  echoWindowMs: 1500            # how long a client write waits for the device to echo it
+  batchMs: 8                    # coalesce shadow-state changes into batches this often (~120 Hz)
+
+# Optional: extra profile directory (community / venue-specific profiles). Same id overrides built-ins.
+# profilesDir: /etc/koine/profiles
+
+devices:
+  - id: x32
+    name: FOH X32
+    profile: behringer-x32
+    host: 192.168.1.50
+    # include: ["/ch/*", "/main/*", "/dca/*", "/bus/*", "/out/*", "/talkback/*"]  # restrict namespace (OSC patterns)
+    # exclude: ["/ch/*/eq/*"]
+    # transport: { queryRateLimit: 100 }   # per-device transport overrides
+
+  - id: cl5
+    name: Monitor CL5
+    profile: yamaha-scp
+    host: 192.168.1.60
+    include: ["/ch/*", "/mix/*", "/main/*", "/dca/*", "/scene/*"]
+
+  - id: pa
+    name: PA Drive (SQ as system DSP)
+    profile: allen-heath-sq
+    host: 192.168.1.70
+    include: ["/main/*", "/ch/0[1-8]/*"]
+
+  - id: rf
+    name: Vocal RF rack
+    profile: shure-ulxd
+    host: 192.168.1.80
+    include: ["/rx/[12]/*"]
+
+# Rules: Koine listens to one device and acts on another, in each device's own language.
+# when: <path> <op> <literal>  (== != < <= > >= changed)   do: one action or a list
+# Wildcards in `when` become {1}, {2}... in `do`. {value} is the triggering value.
+rules:
+  - name: talkback unmutes the monitor talkback return
+    when: /x32/talkback/a == true
+    do: set /cl5/ch/16/mute false
+  - name: talkback release re-mutes it
+    when: /x32/talkback/a == false
+    do: set /cl5/ch/16/mute true
+  - name: mirror FOH input mutes onto the monitor desk
+    when: /x32/ch/*/mute changed
+    do: set /cl5/ch/{1}/mute {value}
+  - name: spare FOH fader trims the vocal receiver gain
+    when: /x32/ch/32/fader changed
+    do: { set: /rf/rx/1/gain, scale: { type: linear, raw: [-90, 10], value: [-18, 42] } }
+  - name: receiver battery painted onto the FOH scribble strip
+    when: /rf/rx/1/battery/bars changed
+    do: set /x32/ch/32/name "RX1 bat {value}"
+  - name: low battery turns the strip red and fires a QLab cue
+    when: /rf/rx/1/battery/bars <= 1
+    do:
+      - set /x32/ch/32/color "#ff3b30"
+      - osc 192.168.1.20:53000 /cue/lowbatt/start
+    throttleMs: 60000
+  - name: battery ok turns it green again
+    when: /rf/rx/1/battery/bars >= 2
+    do: set /x32/ch/32/color "#34c759"
+# rulesFiles: [/etc/koine/rules.yaml]      # additional rule files (list or {rules: [...]})
+
+# Walk-around UI: only the parameters that matter during tuning, across all vendors.
+ui:
+  title: Walk-around
+  pins:
+    - { path: /x32/ch/10/fader, label: Lead Vox }
+    - { path: /x32/ch/10/mute, label: Lead Vox Mute }
+    - { path: /x32/talkback/a, label: FOH Talkback }
+    - { path: /x32/main/st/mute, label: PA Main Mute }
+    - { path: /pa/main/lr/fader, label: Sub Level }
+    - { path: /x32/out/09/delay/ms, label: Front Fill Delay }
+    - { path: /cl5/ch/01/fader, label: Mon Kick }
+    - { path: /rf/rx/1/gain, label: RX1 Gain }
+    - { path: /rf/rx/1/battery/bars, label: RX1 Battery }

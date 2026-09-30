@@ -1,0 +1,106 @@
+# Shure ULX-D / QLX-D / Axient Digital receivers: ASCII command strings over TCP, port 2202.
+# Reference: "ULX-D Command Strings" (Shure). Messages are bracketed: < GET 1 AUDIO_GAIN >  ->  < REP 1 AUDIO_GAIN 020 >
+#
+# The receiver pushes a REP for every change on its own, so no polling is needed after the
+# initial "< GET 0 ALL >". This lets a console fader adjust receiver gain and lets battery /
+# RF telemetry be painted onto console scribble strips via rules.
+id: shure-ulxd
+name: Shure ULX-D / QLX-D / AD receivers
+vendor: Shure
+models: [ULXD4, ULXD4D, ULXD4Q, QLXD4, AD4D, AD4Q]
+verified: false
+notes: |
+  Written from the Shure command string documentation, not yet checked on a receiver.
+  Channel numbers are 1-based receiver channels (1 for a single, 1-2 dual, 1-4 quad).
+
+transport:
+  type: tcp-line
+  port: 2202
+  delimiter: ">"
+  reconnectMs: 2000
+  timeoutMs: 0
+  queryRateLimit: 30
+  onConnect: ["< GET 0 ALL >"]
+  keepalive: { command: "< GET 1 AUDIO_GAIN >", intervalMs: 10000 }
+  dialect:
+    get: "< GET {device} >"
+    set: "< SET {device} {raw} >"
+    quoteStrings: braces
+    response: '^\s*<\s*REP\s+(?<key>\d+\s+[A-Z_]+)\s+(?<raw>.*?)\s*$'
+    error: '^\s*<\s*REP\s+ERR'
+
+ranges:
+  ch: { from: 1, to: 4 }
+
+parameters:
+  - path: /rx/{ch}/gain
+    device: "{ch1} AUDIO_GAIN"
+    type: int
+    unit: dB
+    range: [-18, 42]
+    deviceType: i
+    scale: { type: linear, raw: [0, 60], value: [-18, 42] }
+    role: fader
+    description: Receiver channel {ch1} audio output gain
+
+  - path: /rx/{ch}/name
+    device: "{ch1} CHAN_NAME"
+    type: string
+    deviceType: s
+    scale: { type: string, maxLength: 8 }
+    role: name
+    description: Receiver channel {ch1} name
+
+  - path: /rx/{ch}/mute
+    device: "{ch1} AUDIO_MUTE"
+    type: bool
+    deviceType: s
+    scale: { type: enum, map: { "OFF": false, "ON": true } }
+    role: mute
+    description: Receiver channel {ch1} audio mute
+
+  - path: /rx/{ch}/battery/bars
+    device: "{ch1} BATT_BARS"
+    type: int
+    range: [0, 5]
+    access: r
+    scale: { type: int }
+    description: Transmitter battery bars (255 = unknown / no transmitter)
+
+  - path: /rx/{ch}/battery/minutes
+    device: "{ch1} BATT_RUN_TIME"
+    type: int
+    unit: min
+    access: r
+    scale: { type: int }
+    description: Transmitter battery run time remaining (65535 = calculating, 65534 = unknown)
+
+  - path: /rx/{ch}/rf/level
+    device: "{ch1} RX_RF_LVL"
+    type: int
+    unit: dBm
+    access: r
+    scale: { type: linear, raw: [0, 115], value: [-128, -13] }
+    description: RF signal level
+
+  - path: /rx/{ch}/audio/level
+    device: "{ch1} AUDIO_LVL"
+    type: int
+    unit: dBFS
+    access: r
+    scale: { type: linear, raw: [0, 50], value: [-50, 0] }
+    description: Audio level (peak)
+
+  - path: /rx/{ch}/frequency
+    device: "{ch1} FREQUENCY"
+    type: int
+    unit: kHz
+    access: r
+    scale: { type: int }
+    description: Receiver frequency in kHz
+
+  - path: /rx/{ch}/tx/type
+    device: "{ch1} TX_TYPE"
+    type: string
+    access: r
+    description: Transmitter model
