@@ -41,7 +41,7 @@ another. It is zero-dependency Node.js: copy the folder, run `node`, nothing to 
 
 ```bash
 cd koine
-npm test          # 48 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
+npm test          # 53 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
 npm run demo      # four mock devices + example rules, UI at http://localhost:8010/ui
 ```
 
@@ -107,6 +107,36 @@ rules:
 Rules never re-trigger themselves and cascades stop after eight hops, so two mirrored faders cannot
 fight forever. Values arriving while a device is still syncing are treated as population, not events.
 
+## Editing from the iPad
+
+Everything you would touch during a show can be changed from the web page, not only from the
+YAML on the host:
+
+- **Rules**: add, test, edit, turn off, delete. The Test button shows which paths a `when` matches
+  before you save it. Multi-line `do` boxes take one action per line.
+- **Pinned page**: Edit pins, add by path (with autocomplete over every known parameter), reorder,
+  remove.
+- **Devices**: Setup tab lists every device with its connection state; add a console by id,
+  profile, IP and optional include patterns, or remove one that was added this way.
+
+Edits are saved to a store file on the Koine host (`<config>.store.json`, or `--store <file>`) and
+merged on top of the YAML at start-up, so the YAML keeps its comments and the edits survive restarts.
+Every connected screen is told about a change the moment it happens. A rule that came from the YAML
+and is edited on the iPad becomes a store rule that shadows the original.
+
+The same operations are available over REST for anything else that wants to program Koine:
+
+| | |
+| --- | --- |
+| `GET /api/rules`, `POST /api/rules`, `PUT /api/rules/:id`, `DELETE /api/rules/:id` | manage rules |
+| `POST /api/rules/test` | dry-run a rule: parse errors and matching paths |
+| `POST /api/rules/:id/enable` `{"enabled": false}` | switch a rule on or off |
+| `GET /api/ui`, `PUT /api/ui` `{"pins": [...], "title": ...}` | the pinned page |
+| `GET /api/devices`, `POST /api/devices`, `DELETE /api/devices/:id` | devices |
+| `GET /api/paths` | every parameter with type, unit, range and role (for pickers) |
+
+![Rule editor on the iPad](docs/ui-rule-editor.png)
+
 ## Normalised namespace
 
 Every device is mounted under its configured id. Paths and units are the same regardless of vendor:
@@ -134,7 +164,7 @@ Each OSCQuery node also carries a `DEVICE` object (`raw`, vendor `address`, `sca
 
 **WebSocket** (same port): OSCQuery `LISTEN` / `IGNORE` with binary OSC updates, plus JSON commands
 `LISTEN_ALL`, `FORMAT json`, `SNAPSHOT`, `SET`, `GET`, `TREE`, `STATUS`, `RULES`, `RESYNC`. Pushes
-`DEVICE_STATUS`, `STALE` and `RULE_FIRED` events. A client never receives its own writes echoed back.
+`DEVICE_STATUS`, `STALE`, `RULE_FIRED`, `CONFIG_CHANGED` and `TREE_CHANGED` events. A client never receives its own writes echoed back.
 
 **OSC over UDP** (port 9000): `/x32/ch/10/fader -12.0` sets, `/x32/ch/10/fader` queries,
 `/cl5/ch/0[1-8]/mute T` fans out over patterns, `/koine/listen [pattern]` subscribes the sender for
@@ -198,6 +228,7 @@ See `config/daemon.example.yaml`. Per device: `id`, `profile`, `host`, optional 
 `include` / `exclude` OSC patterns (a pattern also matches everything beneath it), and `transport`
 overrides. `rules:` inline or `rulesFiles:`. `profilesDir:` for community or venue profiles; a profile
 with the same `id` overrides a built-in one. `ui.pins` lists what the walk-around page shows.
+`storePath:` (or `--store`) is where UI edits are saved; it defaults to `<config>.store.json`.
 
 ## Layout
 
@@ -209,11 +240,11 @@ src/profile/             profile loader/validator, placeholder expansion, scalin
 src/shadow/state.js      shadow state engine (cache, echo suppression, batching)
 src/rules/engine.js      rules engine (conditions, templates, actions, loop guards)
 src/drivers/             base, osc-udp, tcp-line, midi-tcp
-src/core/                Device (profile+driver+shadow) and Daemon (orchestration)
+src/core/                Device (profile+driver+shadow), Daemon (orchestration, live editing), Store (persisted edits)
 src/northbound/          ws.js (RFC 6455), oscquery.js (HTTP/WS/REST), osc-server.js (UDP), mdns.js
 profiles/                vendor profiles
 tools/                   mock X32, Yamaha SCP, A&H SQ, Shure ULX-D (used by tests and `demo`)
-ui/index.html            touch-first walk-around web UI with Rules tab
+ui/index.html            touch-first web UI: pinned page, channel strips, rule editor, device setup
 test/                    node:test suites (unit + end-to-end)
 ```
 

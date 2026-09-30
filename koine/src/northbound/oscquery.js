@@ -24,6 +24,8 @@ class OscQueryServer {
     this.shadow.on('stale', (ev) => this._broadcastJson({ COMMAND: 'STALE', DATA: ev }));
     daemon.on('deviceStatus', (st) => this._broadcastJson({ COMMAND: 'DEVICE_STATUS', DATA: st }));
     daemon.on('ruleFired', (ev) => this._broadcastJson({ COMMAND: 'RULE_FIRED', DATA: ev }));
+    daemon.on('configChanged', (ev) => this._broadcastJson({ COMMAND: 'CONFIG_CHANGED', DATA: { ...ev, ui: daemon.config.ui, rules: daemon.rules.list(), devices: daemon.status().devices } }));
+    this.shadow.on('unregister', () => this._broadcastJson({ COMMAND: 'TREE_CHANGED', DATA: {} }));
     this.uiFile = path.join(__dirname, '..', '..', 'ui', 'index.html');
     this._pingTimer = setInterval(() => { for (const c of this.clients.values()) c.conn.ping(); }, 20000);
     if (this._pingTimer.unref) this._pingTimer.unref();
@@ -49,7 +51,7 @@ class OscQueryServer {
     const u = url.parse(req.url, true);
     const pathname = decodeURIComponent(u.pathname.replace(/\/+$/, '') || '/');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     try {
@@ -82,11 +84,13 @@ class OscQueryServer {
   }
 
   _api(req, res, pathname, u) {
+    if ((req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') && pathname !== '/api/set') return this._edit(req, res, pathname);
     if (pathname === '/api/status') return json(res, this.daemon.status());
     if (pathname === '/api/devices') return json(res, this.daemon.status().devices);
     if (pathname === '/api/profiles') return json(res, [...this.daemon.profiles.values()].map((p) => ({ id: p.id, name: p.name, vendor: p.vendor, models: p.models, transport: p.transport.type, verified: p.verified })));
     if (pathname === '/api/ui') return json(res, { name: this.daemon.config.daemon.name, ...this.daemon.config.ui });
     if (pathname === '/api/rules') return json(res, this.daemon.rules.list());
+    if (pathname === '/api/paths') return json(res, [...this.shadow.nodes.values()].map((n) => ({ path: n.path, type: n.def.type, role: n.def.role, unit: n.def.unit, range: n.def.range, access: n.def.access })));
     if (pathname === '/api/snapshot') return json(res, this.shadow.snapshot(u.query.prefix || '/'));
     if (pathname === '/api/set') {
       if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
@@ -103,6 +107,34 @@ class OscQueryServer {
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'unknown api endpoint' }));
+  }
+
+  /** Live editing endpoints: rules, pins, devices. Persisted to the store and broadcast to every client. */
+  _edit(req, res, pathname) {
+    return readBody(req).then((body) => {
+      const b = body ? JSON.parse(body) : {};
+      const { RulesEngine } = require('../rules/engine');
+      const m = /^\/api\/(rules|ui|devices)(?:\/([^/]+))?(?:\/(test|enable))?$/.exec(pathname);
+      if (!m) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'unknown api endpoint' })); }
+      const [, kind, id, sub] = m;
+      let out;
+      if (kind === 'rules') {
+        if (req.method === 'POST' && !id && sub !== 'test') out = this.daemon.addRuleLive(b);
+        else if (req.method === 'POST' && (id === 'test' || sub === 'test')) { const c = RulesEngine.compile(b); out = { ok: true, name: c.name, when: c.when, actions: c.actions.map((a) => a.type), matches: [...this.shadow.nodes.keys()].filter((p) => c.whenRe.test(p)).slice(0, 50) }; }
+        else if (req.method === 'POST' && id && sub === 'enable') { const r = this.daemon.rules.rules.find((x) => x.id === id); if (!r) throw new Error(`unknown rule "${id}"`); out = this.daemon.updateRuleLive(id, { ...r.raw, enabled: b.enabled !== false }); }
+        else if (req.method === 'PUT' && id) out = this.daemon.updateRuleLive(id, b);
+        else if (req.method === 'DELETE' && id) out = { removed: this.daemon.removeRuleLive(id) };
+        else throw new Error('unsupported rules operation');
+      } else if (kind === 'ui') {
+        if (req.method === 'PUT' || req.method === 'POST') out = this.daemon.setUiLive(b);
+        else throw new Error('unsupported ui operation');
+      } else if (kind === 'devices') {
+        if (req.method === 'POST' && !id) out = this.daemon.addDeviceLive(b);
+        else if (req.method === 'DELETE' && id) out = { removed: this.daemon.removeDeviceLive(id) };
+        else throw new Error('unsupported devices operation');
+      }
+      json(res, out);
+    }).catch((e) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); });
   }
 
   _postValue(req, res, pathname) {

@@ -57,6 +57,26 @@
   .rule.hot { outline:2px solid var(--acc); }
   .log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--dim); background:var(--panel); border-radius:12px; padding:10px 12px; max-height:40vh; overflow:auto; -webkit-user-select:text; user-select:text; }
   .log div b { color:var(--fg); font-weight:600; }
+  .btn { padding:9px 14px; border-radius:10px; border:1px solid #2a2f39; background:var(--panel2); color:var(--fg); font-size:14px; }
+  .btn.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .btn.danger { color:var(--bad); }
+  .btn.small { padding:6px 10px; font-size:12px; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 12px; }
+  .form { background:var(--panel); border-radius:14px; padding:14px; display:grid; grid-template-columns:120px 1fr; gap:10px 12px; align-items:center; margin-bottom:12px; }
+  .form label { color:var(--dim); font-size:13px; }
+  .form input, .form select, .form textarea { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2a2f39; background:var(--panel2); color:var(--fg); font-size:15px; -webkit-user-select:text; user-select:text; font-family:inherit; }
+  .form textarea { font-family:ui-monospace,Menlo,monospace; font-size:13px; min-height:64px; }
+  .form .row { display:flex; gap:8px; }
+  .form .row > * { flex:1; }
+  .form .actions { grid-column:1 / -1; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+  .form .hint { grid-column:1 / -1; font-size:12px; color:var(--dim); }
+  .rule .tools { grid-column:1 / -1; display:flex; gap:6px; justify-content:flex-end; }
+  .card .pintools { position:absolute; top:6px; right:6px; display:flex; gap:4px; }
+  .card .pintools button { width:30px; height:30px; border-radius:8px; border:1px solid #2a2f39; background:var(--panel2); color:var(--fg); }
+  .devlist { display:flex; flex-direction:column; gap:8px; }
+  .dev { background:var(--panel); border-radius:12px; padding:10px 12px; display:flex; align-items:center; gap:12px; }
+  .dev .info { flex:1; min-width:0; }
+  .dev .info .sub { font-size:12px; color:var(--dim); }
   .toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#2a2f39; color:#fff; padding:10px 16px; border-radius:10px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.show { opacity:1; }
   select { padding:8px 10px; border-radius:10px; background:var(--panel2); color:var(--fg); border:1px solid #2a2f39; font-size:14px; }
@@ -76,7 +96,8 @@
   const $ = (s, el = document) => el.querySelector(s);
   const cards = new Map(); // path -> [update fn], rebuilt on every render()
   const initialView = (location.hash.match(/view=([^&]+)/) || [])[1];
-  const state = { nodes: new Map(), tree: null, devices: [], rules: [], ruleLog: [], ui: { pins: [], title: 'Walk-around' }, view: initialView ? decodeURIComponent(initialView) : 'pins', ws: null, id: null, dragging: new Map(), lastSend: new Map(), sendTimers: new Map() };
+  const openNewRule = /(^|[#&])new=1/.test(location.hash);
+  const state = { nodes: new Map(), tree: null, devices: [], rules: [], ruleLog: [], profiles: [], editPins: false, ruleForm: openNewRule ? { id: null } : null, deviceForm: false, ui: { pins: [], title: 'Walk-around' }, view: initialView ? decodeURIComponent(initialView) : 'pins', ws: null, id: null, dragging: new Map(), lastSend: new Map(), sendTimers: new Map() };
 
   // ---------------------------------------------------------------- connection
   let backoff = 500;
@@ -102,13 +123,20 @@
         case 'TREE': state.tree = msg.DATA; buildNav(); render(); break;
         case 'DEVICE_STATUS': { const i = state.devices.findIndex((d) => d.id === msg.DATA.id); if (i >= 0) state.devices[i] = msg.DATA; else state.devices.push(msg.DATA); renderDevices(); break; }
         case 'STALE': for (const n of state.nodes.values()) if (n.path.startsWith('/' + msg.DATA.deviceId + '/')) { n.stale = msg.DATA.stale; updateNode(n.path); } break;
-        case 'RULES': state.rules = msg.DATA; if (state.view === 'rules') render(); break;
+        case 'RULES': state.rules = msg.DATA; buildNav(); if (state.view === 'rules') render(); break;
         case 'RULE_FIRED': {
           state.ruleLog.unshift(msg.DATA); state.ruleLog.length = Math.min(state.ruleLog.length, 200);
           const r = state.rules.find((x) => x.name === msg.DATA.rule); if (r) { r.fires++; r.lastFired = msg.DATA.ts; r.lastError = msg.DATA.error; }
           if (state.view === 'rules') render(); else toast(`rule: ${msg.DATA.rule}`);
           break;
         }
+        case 'CONFIG_CHANGED': {
+          state.ui = { ...state.ui, ...msg.DATA.ui }; state.rules = msg.DATA.rules; state.devices = msg.DATA.devices;
+          if (msg.DATA.what === 'device') { state.ws.send(JSON.stringify({ COMMAND: 'TREE', DATA: '/' })); state.ws.send(JSON.stringify({ COMMAND: 'SNAPSHOT', DATA: '/' })); }
+          renderDevices(); buildNav(); render(); toast(`updated: ${msg.DATA.what}`);
+          break;
+        }
+        case 'TREE_CHANGED': for (const p of [...state.nodes.keys()]) if (!state.devices.some((d) => p.startsWith('/' + d.id + '/'))) state.nodes.delete(p); state.ws.send(JSON.stringify({ COMMAND: 'TREE', DATA: '/' })); break;
         case 'ACK': for (const r of msg.DATA) if (!r.accepted) toast(`${r.path}: ${r.reason}`); break;
         case 'ERROR': toast(msg.DATA); break;
       }
@@ -116,6 +144,20 @@
     ws.onclose = () => { setLink(false, 'reconnecting'); setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); };
     ws.onerror = () => ws.close();
   }
+  async function api(method, path, body) {
+    const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  }
+  function pathDatalist() {
+    let dl = document.getElementById('paths');
+    if (!dl) { dl = document.createElement('datalist'); dl.id = 'paths'; document.body.appendChild(dl); }
+    if (dl.childElementCount !== state.nodes.size) dl.innerHTML = [...state.nodes.keys()].sort().map((p) => `<option value="${p}">`).join('');
+    return dl;
+  }
+  function field(label, el, hint) { const l = document.createElement('label'); l.textContent = label; const w = document.createElement('div'); w.appendChild(el); if (hint) { const h = document.createElement('div'); h.className = 'hint'; h.style.gridColumn = 'auto'; h.textContent = hint; w.appendChild(h); } return [l, w]; }
+  function input(type, value, attrs = {}) { const i = document.createElement(type === 'textarea' ? 'textarea' : type === 'select' ? 'select' : 'input'); if (type !== 'textarea' && type !== 'select') i.type = type; if (value !== undefined && value !== null) i.value = value; Object.assign(i, attrs); return i; }
   function setLink(on, text) { const el = $('#link'); el.classList.toggle('on', on); $('span', el).textContent = text; }
   function mergeNode(n) { const cur = state.nodes.get(n.path) || { path: n.path }; Object.assign(cur, n); state.nodes.set(n.path, cur); }
 
@@ -153,7 +195,7 @@
   }
   function buildNav() {
     const nav = $('#nav');
-    nav.innerHTML = '<button data-view="pins">Pinned</button>' + state.devices.map((d) => `<button data-view="dev:${d.id}">${d.name || d.id}</button>`).join('') + '<button data-view="all">Browse</button>' + (state.rules.length ? `<button data-view="rules">Rules (${state.rules.length})</button>` : '');
+    nav.innerHTML = '<button data-view="pins">Pinned</button>' + state.devices.map((d) => `<button data-view="dev:${d.id}">${d.name || d.id}</button>`).join('') + '<button data-view="all">Browse</button>' + `<button data-view="rules">Rules (${state.rules.length})</button>` + '<button data-view="setup">Setup</button>';
     for (const b of nav.querySelectorAll('button')) { b.classList.toggle('active', b.dataset.view === state.view); b.onclick = () => { state.view = b.dataset.view; history.replaceState(null, '', '#view=' + encodeURIComponent(state.view)); buildNav(); render(); }; }
   }
   function render() {
@@ -163,16 +205,31 @@
     if (state.view === 'pins') return renderPins(main);
     if (state.view.startsWith('dev:')) return renderDevice(main, state.view.slice(4));
     if (state.view === 'rules') return renderRules(main);
+    if (state.view === 'setup') return renderSetup(main);
     return renderBrowse(main);
   }
   function renderRules(main) {
     const h = document.createElement('h2'); h.textContent = 'Rules · when one device changes, Koine acts on another'; main.appendChild(h);
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const add = document.createElement('button'); add.className = 'btn primary'; add.textContent = '+ New rule';
+    add.onclick = () => { state.ruleForm = { id: null }; render(); };
+    bar.appendChild(add); main.appendChild(bar);
+    if (state.ruleForm && !state.ruleForm.id) main.appendChild(ruleForm(null));
     const list = document.createElement('div'); list.className = 'rules';
     const now = Date.now();
     for (const r of state.rules) {
+      if (state.ruleForm && state.ruleForm.id === r.id) { list.appendChild(ruleForm(r)); continue; }
       const el = document.createElement('div'); el.className = 'rule' + (r.lastFired && now - r.lastFired < 3000 ? ' hot' : '');
       const doTxt = Array.isArray(r.do) ? r.do.map(fmtAction).join('\n     ') : fmtAction(r.do);
-      el.innerHTML = `<div class="name">${esc(r.name)}${r.enabled ? '' : ' (disabled)'}</div><div class="fires">${r.fires} fire${r.fires === 1 ? '' : 's'}${r.lastFired ? ' · ' + new Date(r.lastFired).toLocaleTimeString() : ''}</div><div class="cond">when ${esc(typeof r.when === 'string' ? r.when : JSON.stringify(r.when))}${r.and && r.and.length ? '\n and  ' + r.and.map(esc).join(', ') : ''}\n do   ${esc(doTxt)}${r.lastError ? '\n ERR  ' + esc(r.lastError) : ''}</div>`;
+      el.innerHTML = `<div class="name">${esc(r.name)}${r.enabled ? '' : ' (off)'}${r.source === 'config' ? ' <span class="sub" style="color:var(--dim);font-weight:400;font-size:11px">from config file</span>' : ''}</div><div class="fires">${r.fires} fire${r.fires === 1 ? '' : 's'}${r.lastFired ? ' · ' + new Date(r.lastFired).toLocaleTimeString() : ''}</div><div class="cond">when ${esc(typeof r.when === 'string' ? r.when : JSON.stringify(r.when))}${r.and && r.and.length ? '\n and  ' + [].concat(r.and).map(esc).join(', ') : ''}\n do   ${esc(doTxt)}${r.lastError ? '\n ERR  ' + esc(r.lastError) : ''}</div>`;
+      const tools = document.createElement('div'); tools.className = 'tools';
+      const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = 'btn small ' + cls; b.textContent = txt; b.onclick = fn; return b; };
+      tools.append(
+        mk(r.enabled ? 'Turn off' : 'Turn on', '', () => api('POST', `/api/rules/${r.id}/enable`, { enabled: !r.enabled }).catch((e) => toast(e.message))),
+        mk('Edit', '', () => { state.ruleForm = { id: r.id }; render(); }),
+        mk('Delete', 'danger', () => { if (confirm(`Delete rule "${r.name}"?`)) api('DELETE', `/api/rules/${r.id}`).catch((e) => toast(e.message)); }),
+      );
+      el.appendChild(tools);
       list.appendChild(el);
     }
     main.appendChild(list);
@@ -181,15 +238,121 @@
     log.innerHTML = state.ruleLog.length ? state.ruleLog.map((e) => `<div>${new Date(e.ts).toLocaleTimeString()} <b>${esc(e.rule)}</b> ← ${esc(e.trigger)} = ${esc(JSON.stringify(e.value))} → ${esc(e.actions.map(fmtResult).join('; '))}${e.error ? ' <span style="color:var(--bad)">' + esc(e.error) + '</span>' : ''}</div>`).join('') : '<div>nothing fired yet</div>';
     main.appendChild(log);
   }
+  function ruleForm(r) {
+    pathDatalist();
+    const f = document.createElement('div'); f.className = 'form';
+    const whenStr = r ? (typeof r.when === 'string' ? r.when : `${r.when.path} ${r.when.op}${r.when.value !== undefined ? ' ' + JSON.stringify(r.when.value) : ''}`) : '';
+    const m = /^(\S+)\s*(changed|==|!=|<=|>=|<|>)\s*(.*)$/.exec(whenStr) || [];
+    const name = input('text', r ? r.name : '', { placeholder: 'What this rule does, in your words' });
+    const path = input('text', m[1] || '', { placeholder: '/x32/talkback/a' }); path.setAttribute('list', 'paths');
+    const op = input('select'); op.innerHTML = ['changed', '==', '!=', '<', '<=', '>', '>='].map((o) => `<option ${o === (m[2] || 'changed') ? 'selected' : ''}>${o}</option>`).join('');
+    const val = input('text', m[3] || '', { placeholder: 'true / false / -10 / "Kick"' });
+    const syncVal = () => { val.style.visibility = op.value === 'changed' ? 'hidden' : 'visible'; }; op.onchange = syncVal; syncVal();
+    const row = document.createElement('div'); row.className = 'row'; row.append(path, op, val); path.style.flex = '3';
+    const and = input('textarea', r ? [].concat(r.and || []).join('\n') : '', { placeholder: 'optional, one per line: /x32/main/st/mute == false' });
+    const doTa = input('textarea', r ? [].concat(r.do).map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join('\n') : '', { placeholder: 'one action per line:\nset /cl5/ch/16/mute false\nset /x32/ch/32/name "RX1 bat {value}"\nosc 192.168.1.20:53000 /cue/1/start' });
+    doTa.style.minHeight = '90px';
+    const throttle = input('number', r ? r.throttleMs || '' : '', { placeholder: '0', min: 0 });
+    const every = input('checkbox'); every.checked = !!(r && r.every); every.style.width = 'auto';
+    const opts = document.createElement('div'); opts.className = 'row';
+    const evLabel = document.createElement('label'); evLabel.style.display = 'flex'; evLabel.style.alignItems = 'center'; evLabel.style.gap = '8px'; evLabel.append(every, document.createTextNode('fire every time the condition is true (not just when it becomes true)'));
+    opts.append(throttle, evLabel); throttle.style.maxWidth = '140px';
+    f.append(...field('Name', name), ...field('When', row), ...field('And', and), ...field('Do', doTa), ...field('Throttle ms', opts));
+    const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'Wildcards in the path become {1}, {2}… in actions. {value} is the value that triggered the rule. Actions: set, osc, http, log, wait, resync.';
+    f.appendChild(hint);
+    const acts = document.createElement('div'); acts.className = 'actions';
+    const build = () => ({ name: name.value.trim() || undefined, when: op.value === 'changed' ? `${path.value.trim()} changed` : `${path.value.trim()} ${op.value} ${val.value.trim()}`, and: and.value.split('\n').map((x) => x.trim()).filter(Boolean), do: doTa.value.split('\n').map((x) => x.trim()).filter(Boolean).map((x) => (x.startsWith('{') ? JSON.parse(x) : x)), throttleMs: Number(throttle.value || 0), every: every.checked, enabled: r ? r.enabled : true });
+    const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = txt; b.onclick = fn; return b; };
+    const testOut = document.createElement('div'); testOut.className = 'hint';
+    acts.append(
+      mk('Cancel', '', () => { state.ruleForm = null; render(); }),
+      mk('Test', '', () => api('POST', '/api/rules/test', build()).then((t) => { testOut.textContent = `OK · matches ${t.matches.length} path${t.matches.length === 1 ? '' : 's'}${t.matches.length ? ': ' + t.matches.slice(0, 4).join(', ') + (t.matches.length > 4 ? '…' : '') : ' (check the path)'}`; }).catch((e) => { testOut.textContent = 'Error: ' + e.message; })),
+      mk(r ? 'Save' : 'Add rule', 'primary', () => { let body; try { body = build(); } catch (e) { return toast(e.message); } (r ? api('PUT', `/api/rules/${r.id}`, body) : api('POST', '/api/rules', body)).then(() => { state.ruleForm = null; }).catch((e) => toast(e.message)); }),
+    );
+    f.append(testOut, acts);
+    return f;
+  }
+  function renderSetup(main) {
+    const h = document.createElement('h2'); h.textContent = 'Devices'; main.appendChild(h);
+    const list = document.createElement('div'); list.className = 'devlist';
+    for (const d of state.devices) {
+      const el = document.createElement('div'); el.className = 'dev';
+      el.innerHTML = `<span class="chip ${d.connected ? 'on' : ''}"><i></i>${d.connected ? 'online' : 'offline'}</span><div class="info"><div>${esc(d.name || d.id)} <span class="sub">/${esc(d.id)}</span></div><div class="sub">${esc(d.profileName || d.profile)} · ${esc(d.host)}:${d.port} · ${d.parameters} parameters · rx ${d.stats ? d.stats.rx : 0} / tx ${d.stats ? d.stats.tx : 0}${d.verified === false ? ' · profile unverified' : ''}</div></div>`;
+      const tools = document.createElement('div'); tools.style.display = 'flex'; tools.style.gap = '6px';
+      const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = 'btn small ' + cls; b.textContent = txt; b.onclick = fn; return b; };
+      tools.appendChild(mk('Resync', '', () => api('GET', `/api/resync?device=${d.id}`).catch(() => fetch(`/api/resync?device=${d.id}`))));
+      if (d.source === 'store') tools.appendChild(mk('Remove', 'danger', () => { if (confirm(`Remove ${d.name || d.id}?`)) api('DELETE', `/api/devices/${d.id}`).catch((e) => toast(e.message)); }));
+      el.appendChild(tools);
+      list.appendChild(el);
+    }
+    main.appendChild(list);
+    const bar = document.createElement('div'); bar.className = 'bar'; bar.style.marginTop = '12px';
+    const add = document.createElement('button'); add.className = 'btn primary'; add.textContent = '+ Add device';
+    add.onclick = () => { state.deviceForm = !state.deviceForm; render(); };
+    bar.appendChild(add); main.appendChild(bar);
+    if (state.deviceForm) main.appendChild(deviceForm());
+    const h2 = document.createElement('h2'); h2.textContent = 'About'; main.appendChild(h2);
+    const about = document.createElement('div'); about.className = 'log';
+    about.innerHTML = `<div>Koine speaks every language on the show network. Edits made here are saved on the Koine host and shared with every connected screen.</div><div>OSCQuery / WebSocket: <b>${esc(location.host)}</b> · OSC/UDP for TouchOSC, QLab, Companion: see <b>/?HOST_INFO</b></div>`;
+    main.appendChild(about);
+  }
+  function deviceForm() {
+    const f = document.createElement('div'); f.className = 'form';
+    const id = input('text', '', { placeholder: 'short id, e.g. mon (becomes /mon/...)' });
+    const name = input('text', '', { placeholder: 'Monitor DM3' });
+    const profile = input('select'); profile.innerHTML = '<option value="">loading…</option>';
+    fetch('/api/profiles').then((r) => r.json()).then((ps) => { state.profiles = ps; profile.innerHTML = ps.map((p) => `<option value="${p.id}">${esc(p.name)}${p.verified === false ? ' (unverified)' : ''}</option>`).join(''); });
+    const host = input('text', '', { placeholder: '192.168.1.60' });
+    const port = input('number', '', { placeholder: 'default from profile' });
+    const include = input('text', '', { placeholder: 'optional, comma separated: /ch/*, /main/*' });
+    f.append(...field('Id', id), ...field('Name', name), ...field('Profile', profile), ...field('IP address', host), ...field('Port', port), ...field('Include', include));
+    const acts = document.createElement('div'); acts.className = 'actions';
+    const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = txt; b.onclick = fn; return b; };
+    acts.append(mk('Cancel', '', () => { state.deviceForm = false; render(); }), mk('Add device', 'primary', () => {
+      const body = { id: id.value.trim(), name: name.value.trim() || undefined, profile: profile.value, host: host.value.trim(), port: port.value ? Number(port.value) : undefined, include: include.value.split(',').map((x) => x.trim()).filter(Boolean) };
+      if (!body.include.length) delete body.include;
+      api('POST', '/api/devices', body).then(() => { state.deviceForm = false; }).catch((e) => toast(e.message));
+    }));
+    f.appendChild(acts);
+    return f;
+  }
   const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
   const fmtAction = (a) => typeof a === 'string' ? a : JSON.stringify(a);
   const fmtResult = (r) => r.set ? `set ${r.set} = ${JSON.stringify(r.value)}${r.noop ? ' (no change)' : ''}` : r.osc ? `osc ${r.osc} ${r.address}` : r.log ? `log "${r.log}"` : JSON.stringify(r);
   function renderPins(main) {
-    if (!state.ui.pins.length) { main.innerHTML = '<div class="empty">No pins configured. Add <code>ui.pins</code> to the daemon config.</div>'; return; }
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const edit = document.createElement('button'); edit.className = 'btn' + (state.editPins ? ' primary' : ''); edit.textContent = state.editPins ? 'Done' : 'Edit pins';
+    edit.onclick = () => { state.editPins = !state.editPins; render(); };
+    bar.appendChild(edit);
+    if (state.editPins) {
+      const path = input('text', '', { placeholder: '/x32/ch/10/fader', list: 'paths' }); path.setAttribute('list', 'paths'); pathDatalist();
+      const label = input('text', '', { placeholder: 'Label (optional)' });
+      const add = document.createElement('button'); add.className = 'btn primary'; add.textContent = '+ Add pin';
+      add.onclick = () => { if (!state.nodes.has(path.value.trim())) return toast('unknown path'); savePins([...state.ui.pins, { path: path.value.trim(), label: label.value.trim() }]); };
+      path.style.minWidth = '260px'; label.style.minWidth = '160px';
+      for (const el of [path, label]) { el.className = ''; el.style.padding = '9px 12px'; el.style.borderRadius = '10px'; el.style.border = '1px solid #2a2f39'; el.style.background = 'var(--panel2)'; el.style.color = 'var(--fg)'; el.style.fontSize = '15px'; }
+      bar.append(path, label, add);
+    }
+    main.appendChild(bar);
+    if (!state.ui.pins.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = state.editPins ? 'Add a pin above.' : 'No pins yet. Tap "Edit pins" to build your page, or add ui.pins in the config.'; main.appendChild(e); return; }
     const grid = document.createElement('div'); grid.className = 'grid';
-    for (const p of state.ui.pins) grid.appendChild(card(p.path, p.label));
+    state.ui.pins.forEach((p, i) => {
+      const c = card(p.path, p.label);
+      if (state.editPins) {
+        const t = document.createElement('div'); t.className = 'pintools';
+        const mk = (txt, fn, title) => { const b = document.createElement('button'); b.textContent = txt; b.title = title; b.onclick = fn; return b; };
+        t.append(
+          mk('◀', () => { if (i === 0) return; const pins = [...state.ui.pins]; [pins[i - 1], pins[i]] = [pins[i], pins[i - 1]]; savePins(pins); }, 'move left'),
+          mk('▶', () => { if (i === state.ui.pins.length - 1) return; const pins = [...state.ui.pins]; [pins[i + 1], pins[i]] = [pins[i], pins[i + 1]]; savePins(pins); }, 'move right'),
+          mk('✕', () => savePins(state.ui.pins.filter((_, j) => j !== i)), 'remove'),
+        );
+        c.appendChild(t);
+      }
+      grid.appendChild(c);
+    });
     main.appendChild(grid);
   }
+  function savePins(pins) { api('PUT', '/api/ui', { pins }).then((ui) => { state.ui = { ...state.ui, ...ui }; render(); }).catch((e) => toast(e.message)); }
   function renderDevice(main, id) {
     const dev = state.devices.find((d) => d.id === id);
     const groups = new Map(); // section -> Map(index -> {fader, mute, name, color})

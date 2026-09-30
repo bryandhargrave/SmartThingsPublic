@@ -1,3 +1,4 @@
 node_modules/
 config/daemon.yaml
 *.log
+config/*.store.json

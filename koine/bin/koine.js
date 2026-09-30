@@ -13,7 +13,7 @@ function usage() {
   console.log(`koine - headless pro audio translation daemon
 
 Usage:
-  koine start [-c config.yaml]         Start the daemon
+  koine start [-c config.yaml] [--store file.json]   Start the daemon (UI edits persist to the store)
   koine demo  [--port 8010]            Start with mock X32 + Yamaha + SQ + ULX-D and example rules (all local)
   koine validate <profile.yaml|dir>    Validate profile(s) and print parameter counts
   koine tree <profile.yaml> [pattern]  Print the expanded normalized namespace of a profile
@@ -38,9 +38,10 @@ async function start() {
   const file = arg('-c', process.env.KOINE_CONFIG || (fs.existsSync(path.join(ROOT, 'config', 'daemon.yaml')) ? path.join(ROOT, 'config', 'daemon.yaml') : null));
   if (!file) { console.error('no config found; pass -c config.yaml (see config/daemon.example.yaml)'); process.exit(2); }
   const cfg = loadConfig(file);
-  const daemon = new Daemon(cfg);
+  const storePath = arg('--store', cfg.storePath || file.replace(/\.(ya?ml|json)$/, '') + '.store.json');
+  const daemon = new Daemon(cfg, { storePath });
   await daemon.start();
-  daemon.log.info(`config: ${file}; devices: ${[...daemon.devices.keys()].join(', ') || '(none)'}; shadow nodes: ${daemon.shadow.nodes.size}`);
+  daemon.log.info(`config: ${file}; store: ${storePath}; devices: ${[...daemon.devices.keys()].join(', ') || '(none)'}; rules: ${daemon.rules.rules.length}; shadow nodes: ${daemon.shadow.nodes.size}`);
   hookSignals(daemon);
 }
 
@@ -89,8 +90,9 @@ async function demo() {
         { path: '/x32/ch/32/name', label: 'FOH Ch32 strip' },
       ],
     },
-  });
+  }, { storePath: arg('--store', path.join(ROOT, 'config', 'demo.store.json')) });
   await daemon.start();
+  daemon.log.info(`demo edits are saved to ${daemon.store.file}`);
   daemon.log.info(`demo: mock X32 udp/${x32.port}, mock Yamaha tcp/${scp.port}, mock SQ tcp/${sq.port}, mock ULX-D tcp/${rf.port}; open http://localhost:${port}/ui`);
   // Simulate surface activity and RF telemetry so the rules have something to react to.
   let tick = 0;

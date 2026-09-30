@@ -51,6 +51,14 @@ class ShadowState extends EventEmitter {
     return node;
   }
 
+  /** Remove every node belonging to a device. */
+  unregister(deviceId) {
+    let n = 0;
+    for (const [p, node] of this.nodes) if (node.deviceId === deviceId) { this.nodes.delete(p); this.pending.delete(p); this._batch.delete(p); n++; }
+    this.emit('unregister', { deviceId, count: n });
+    return n;
+  }
+
   get(path) { return this.nodes.get(path); }
 
   has(path) { return this.nodes.has(path); }

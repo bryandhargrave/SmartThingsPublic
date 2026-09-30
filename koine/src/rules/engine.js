@@ -121,16 +121,20 @@ class RulesEngine extends EventEmitter {
     this.shadow.on('changes', this._onChanges);
   }
 
-  add(r, i = this.rules.length) {
+  /** Validate and compile without installing (used by the UI's dry run). */
+  static compile(r, i = 0) {
     if (!r || !r.when) throw new Error(`rule ${i}: "when" is required`);
     if (!r.do) throw new Error(`rule ${i}: "do" is required`);
     const cond = parseCondition(r.when);
-    const compiled = {
+    const doList = typeof r.do === 'string' && r.do.includes('\n') ? r.do.split('\n').map((x) => x.trim()).filter(Boolean) : r.do;
+    return {
+      id: r.id || null,
       name: r.name || `rule-${i + 1}`,
+      source: r.source || 'config',
       when: cond,
       whenRe: osc.patternToRegExp(cond.path, { capture: true }),
-      and: (Array.isArray(r.and) ? r.and : r.and ? [r.and] : []).map(parseCondition),
-      actions: (Array.isArray(r.do) ? r.do : [r.do]).map(parseAction),
+      and: (Array.isArray(r.and) ? r.and : r.and ? String(r.and).split('\n').map((x) => x.trim()).filter(Boolean) : []).map(parseCondition),
+      actions: (Array.isArray(doList) ? doList : [doList]).map(parseAction),
       every: !!r.every || cond.op === 'changed',
       onSync: !!r.onSync,
       throttleMs: Number(r.throttleMs || 0),
@@ -139,11 +143,35 @@ class RulesEngine extends EventEmitter {
       fires: 0,
       lastFired: 0,
       lastError: null,
-      source: r,
+      raw: r,
     };
+  }
+
+  add(r, i = this.rules.length) {
+    const compiled = RulesEngine.compile(r, i);
     this.rules.push(compiled);
     return compiled;
   }
+
+  remove(id) {
+    const idx = this.rules.findIndex((r) => r.id === id || r.name === id);
+    if (idx < 0) return false;
+    this.rules.splice(idx, 1);
+    for (const k of [...this._lastState.keys()]) if (k.startsWith(`${idx}|`)) this._lastState.delete(k);
+    return true;
+  }
+
+  update(id, r) {
+    const idx = this.rules.findIndex((x) => x.id === id || x.name === id);
+    if (idx < 0) return null;
+    const old = this.rules[idx];
+    const compiled = RulesEngine.compile({ ...r, id: old.id, source: old.source }, idx);
+    compiled.fires = old.fires; compiled.lastFired = old.lastFired;
+    this.rules[idx] = compiled;
+    for (const k of [...this._lastState.keys()]) if (k.startsWith(`${idx}|`)) this._lastState.delete(k);
+    return compiled;
+  }
+
 
   close() {
     this.shadow.off('changes', this._onChanges);
@@ -276,7 +304,7 @@ class RulesEngine extends EventEmitter {
   }
 
   list() {
-    return this.rules.map((r) => ({ name: r.name, when: typeof r.source.when === 'string' ? r.source.when : r.when, and: r.source.and || [], do: r.source.do, enabled: r.enabled, fires: r.fires, lastFired: r.lastFired, lastError: r.lastError, every: r.every, throttleMs: r.throttleMs, debounceMs: r.debounceMs }));
+    return this.rules.map((r) => ({ id: r.id, source: r.source, name: r.name, when: typeof r.raw.when === 'string' ? r.raw.when : r.when, and: r.raw.and || [], do: r.raw.do, enabled: r.enabled, fires: r.fires, lastFired: r.lastFired, lastError: r.lastError, every: !!r.raw.every, onSync: r.onSync, throttleMs: r.throttleMs, debounceMs: r.debounceMs }));
   }
 }
 
