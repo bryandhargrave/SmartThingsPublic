@@ -77,6 +77,11 @@
   .dev { background:var(--panel); border-radius:12px; padding:10px 12px; display:flex; align-items:center; gap:12px; }
   .dev .info { flex:1; min-width:0; }
   .dev .info .sub { font-size:12px; color:var(--dim); }
+  .help { background:var(--panel); border-radius:14px; padding:14px 16px; margin-bottom:12px; line-height:1.5; }
+  .help h3 { margin:0 0 6px; font-size:15px; }
+  .help ol { margin:6px 0 0 18px; padding:0; }
+  .help li { margin:4px 0; }
+  .meta { font-size:12px; color:var(--dim); margin-top:4px; }
   .toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#2a2f39; color:#fff; padding:10px 16px; border-radius:10px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.show { opacity:1; }
   select { padding:8px 10px; border-radius:10px; background:var(--panel2); color:var(--fg); border:1px solid #2a2f39; font-size:14px; }
@@ -85,6 +90,7 @@
 <body>
 <header>
   <h1 id="title">koine</h1>
+  <button id="help" class="btn small" title="What is this?">?</button>
   <span id="link" class="chip link"><i></i><span>connecting</span></span>
   <span id="devices"></span>
 </header>
@@ -97,7 +103,7 @@
   const cards = new Map(); // path -> [update fn], rebuilt on every render()
   const initialView = (location.hash.match(/view=([^&]+)/) || [])[1];
   const openNewRule = /(^|[#&])new=1/.test(location.hash);
-  const state = { nodes: new Map(), tree: null, devices: [], rules: [], ruleLog: [], profiles: [], editPins: false, ruleForm: openNewRule ? { id: null } : null, deviceForm: false, ui: { pins: [], title: 'Walk-around' }, view: initialView ? decodeURIComponent(initialView) : 'pins', ws: null, id: null, dragging: new Map(), lastSend: new Map(), sendTimers: new Map() };
+  const state = { nodes: new Map(), tree: null, devices: [], rules: [], ruleLog: [], profiles: [], editPins: false, ruleForm: openNewRule ? { id: null } : null, deviceForm: false, showHelp: false, ui: { pins: [], title: 'Walk-around' }, view: initialView ? decodeURIComponent(initialView) : 'pins', ws: null, id: null, dragging: new Map(), lastSend: new Map(), sendTimers: new Map() };
 
   // ---------------------------------------------------------------- connection
   let backoff = 500;
@@ -202,6 +208,8 @@
     cards.clear();
     const main = $('#main');
     main.innerHTML = '';
+    if (state.showHelp) main.appendChild(helpPanel());
+    if (state.tree && state.devices.length === 0 && state.view !== 'setup') { gettingStarted(main); return; }
     if (state.view === 'pins') return renderPins(main);
     if (state.view.startsWith('dev:')) return renderDevice(main, state.view.slice(4));
     if (state.view === 'rules') return renderRules(main);
@@ -249,16 +257,54 @@
     const val = input('text', m[3] || '', { placeholder: 'true / false / -10 / "Kick"' });
     const syncVal = () => { val.style.visibility = op.value === 'changed' ? 'hidden' : 'visible'; }; op.onchange = syncVal; syncVal();
     const row = document.createElement('div'); row.className = 'row'; row.append(path, op, val); path.style.flex = '3';
-    const and = input('textarea', r ? [].concat(r.and || []).join('\n') : '', { placeholder: 'optional, one per line: /x32/main/st/mute == false' });
-    const doTa = input('textarea', r ? [].concat(r.do).map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join('\n') : '', { placeholder: 'one action per line:\nset /cl5/ch/16/mute false\nset /x32/ch/32/name "RX1 bat {value}"\nosc 192.168.1.20:53000 /cue/1/start' });
+    const and = input('textarea', r ? [].concat(r.and || []).join('\n') : '', { placeholder: 'optional extra conditions, one per line, e.g.  /x32/main/st/mute == false' }); and.style.minHeight = '44px';
+    const doTa = input('textarea', r ? [].concat(r.do).map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join('\n') : '', { placeholder: 'use "+ Add action" below, or type:\nset /cl5/ch/16/mute false\nset /x32/ch/32/name "RX1 bat {value}"\nosc 192.168.1.20:53000 /cue/1/start' });
     doTa.style.minHeight = '90px';
     const throttle = input('number', r ? r.throttleMs || '' : '', { placeholder: '0', min: 0 });
     const every = input('checkbox'); every.checked = !!(r && r.every); every.style.width = 'auto';
     const opts = document.createElement('div'); opts.className = 'row';
     const evLabel = document.createElement('label'); evLabel.style.display = 'flex'; evLabel.style.alignItems = 'center'; evLabel.style.gap = '8px'; evLabel.append(every, document.createTextNode('fire every time the condition is true (not just when it becomes true)'));
     opts.append(throttle, evLabel); throttle.style.maxWidth = '140px';
-    f.append(...field('Name', name), ...field('When', row), ...field('And', and), ...field('Do', doTa), ...field('Throttle ms', opts));
-    const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'Wildcards in the path become {1}, {2}… in actions. {value} is the value that triggered the rule. Actions: set, osc, http, log, wait, resync.';
+    // Start from an example
+    const examples = [
+      { label: 'Start from an example…', v: null },
+      { label: 'Talkback on desk A unmutes a channel on desk B', v: { name: 'Talkback unmutes monitor return', path: '/x32/talkback/a', op: '==', val: 'true', do: 'set /cl5/ch/16/mute false' } },
+      { label: 'Mirror all input mutes from desk A to desk B', v: { name: 'Mirror FOH mutes to monitors', path: '/x32/ch/*/mute', op: 'changed', do: 'set /cl5/ch/{1}/mute {value}' } },
+      { label: 'Link one fader on desk A to a fader on desk B (dB to dB)', v: { name: 'Link house music faders', path: '/x32/ch/31/fader', op: 'changed', do: 'set /cl5/ch/31/fader {value}' } },
+      { label: 'Receiver battery shown on a scribble strip', v: { name: 'RX1 battery on strip 32', path: '/rf/rx/1/battery/bars', op: 'changed', do: 'set /x32/ch/32/name "RX1 bat {value}"' } },
+      { label: 'Low battery turns a strip red and fires a QLab cue', v: { name: 'RX1 low battery', path: '/rf/rx/1/battery/bars', op: '<=', val: '1', do: 'set /x32/ch/32/color "#ff3b30"\nosc 192.168.1.20:53000 /cue/lowbatt/start' } },
+      { label: 'Spare fader trims a receiver gain', v: { name: 'Fader 32 trims RX1 gain', path: '/x32/ch/32/fader', op: 'changed', do: '{"set":"/rf/rx/1/gain","scale":{"type":"linear","raw":[-90,10],"value":[-18,42]}}' } },
+    ];
+    const ex = input('select'); ex.innerHTML = examples.map((e, i) => `<option value="${i}">${esc(e.label)}</option>`).join('');
+    ex.onchange = () => { const v = examples[Number(ex.value)].v; if (!v) return; name.value = v.name; path.value = v.path; op.value = v.op; val.value = v.val || ''; doTa.value = v.do; syncVal(); pathInfo(); };
+    // Live info about the chosen path
+    const info = document.createElement('div'); info.className = 'hint'; info.style.gridColumn = 'auto';
+    const pathInfo = () => {
+      const p = path.value.trim();
+      if (!p) { info.textContent = 'Pick the parameter to watch. Type / to see everything Koine knows, or use * for a whole bank (e.g. /x32/ch/*/mute).'; return; }
+      if (/[*?[{]/.test(p)) { const re = new RegExp('^' + p.replace(/[.+^$()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]') + '$'); const n = [...state.nodes.keys()].filter((x) => re.test(x)).length; info.textContent = n ? `${n} parameters match. Each * becomes {1}, {2}… in the actions.` : 'No parameter matches this pattern yet.'; return; }
+      const m = meta(p); const n = state.nodes.get(p);
+      if (!m) { info.textContent = 'Unknown parameter (check the device id and path).'; return; }
+      const k = kind(m);
+      info.textContent = `${k === 'bool' ? 'on/off value (true or false)' : k === 'range' ? `number ${m.RANGE[0].MIN} to ${m.RANGE[0].MAX}${m.UNIT ? ' ' + m.UNIT[0] : ''}` : k === 'color' ? 'colour (#rrggbb)' : k === 'number' ? 'number' : 'text'}${n && n.value !== null ? ` · currently ${JSON.stringify(n.value)}` : ''}`;
+    };
+    path.oninput = pathInfo; pathInfo();
+    const whenWrap = document.createElement('div'); whenWrap.append(row, info);
+    // Guided action builder
+    const ab = document.createElement('div'); ab.className = 'row'; ab.style.marginTop = '6px';
+    const abType = input('select'); abType.innerHTML = '<option value="set">Set a value on a device</option><option value="osc">Send an OSC message</option><option value="log">Write a log line</option>';
+    const abPath = input('text', '', { placeholder: '/cl5/ch/16/mute' }); abPath.setAttribute('list', 'paths');
+    const abVal = input('text', '', { placeholder: 'value, or {value} to pass it through' });
+    const abAdd = document.createElement('button'); abAdd.className = 'btn small'; abAdd.textContent = '+ Add action'; abAdd.style.flex = '0 0 auto';
+    const abSync = () => { abPath.placeholder = abType.value === 'set' ? '/cl5/ch/16/mute' : abType.value === 'osc' ? '192.168.1.20:53000 /cue/1/start' : 'message, e.g. talkback pressed ({value})'; abVal.style.display = abType.value === 'set' ? '' : 'none'; abPath.style.flex = abType.value === 'set' ? '2' : '3'; };
+    abType.onchange = abSync; abSync();
+    abAdd.onclick = () => { const p = abPath.value.trim(); if (!p) return; const line = abType.value === 'set' ? `set ${p} ${abVal.value.trim() || '{value}'}` : abType.value === 'osc' ? `osc ${p}` : `log ${p}`; doTa.value = (doTa.value.trim() ? doTa.value.trim() + '\n' : '') + line; abPath.value = ''; abVal.value = ''; };
+    ab.append(abType, abPath, abVal, abAdd);
+    const doWrap = document.createElement('div'); doWrap.append(doTa, ab);
+    const doHint = document.createElement('div'); doHint.className = 'hint'; doHint.style.gridColumn = 'auto'; doHint.textContent = 'One action per line, in order. {value} is what triggered the rule; {1} is the first * in the path. Koine handles the units: dB stays dB even between brands.';
+    doWrap.appendChild(doHint);
+    f.append(...field('Example', ex), ...field('Name', name), ...field('When this changes', whenWrap), ...field('…and only if', and), ...field('Do this', doWrap), ...field('Limit', opts));
+    const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'Limit: throttle in ms stops a rule firing more often than that. Comparisons (==, <, …) fire once when they become true, not on every update, unless you tick the box.';
     f.appendChild(hint);
     const acts = document.createElement('div'); acts.className = 'actions';
     const build = () => ({ name: name.value.trim() || undefined, when: op.value === 'changed' ? `${path.value.trim()} changed` : `${path.value.trim()} ${op.value} ${val.value.trim()}`, and: and.value.split('\n').map((x) => x.trim()).filter(Boolean), do: doTa.value.split('\n').map((x) => x.trim()).filter(Boolean).map((x) => (x.startsWith('{') ? JSON.parse(x) : x)), throttleMs: Number(throttle.value || 0), every: every.checked, enabled: r ? r.enabled : true });
@@ -274,6 +320,7 @@
   }
   function renderSetup(main) {
     const h = document.createElement('h2'); h.textContent = 'Devices'; main.appendChild(h);
+    if (!state.devices.length) { const e = document.createElement('div'); e.className = 'help'; e.innerHTML = '<h3>Add the gear on your network</h3>Each device needs a short id (it becomes the start of every path, like <b>/foh/ch/01/fader</b>), its brand profile and its IP address. Koine connects straight away and reads the whole desk.'; main.appendChild(e); }
     const list = document.createElement('div'); list.className = 'devlist';
     for (const d of state.devices) {
       const el = document.createElement('div'); el.className = 'dev';
@@ -298,13 +345,14 @@
   }
   function deviceForm() {
     const f = document.createElement('div'); f.className = 'form';
-    const id = input('text', '', { placeholder: 'short id, e.g. mon (becomes /mon/...)' });
-    const name = input('text', '', { placeholder: 'Monitor DM3' });
+    const id = input('text', '', { placeholder: 'short id, letters and digits: foh, mon, rf' });
+    id.oninput = () => { id.value = id.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''); };
+    const name = input('text', '', { placeholder: 'how it shows on screen, e.g. Monitor DM3' });
     const profile = input('select'); profile.innerHTML = '<option value="">loading…</option>';
     fetch('/api/profiles').then((r) => r.json()).then((ps) => { state.profiles = ps; profile.innerHTML = ps.map((p) => `<option value="${p.id}">${esc(p.name)}${p.verified === false ? ' (unverified)' : ''}</option>`).join(''); });
-    const host = input('text', '', { placeholder: '192.168.1.60' });
-    const port = input('number', '', { placeholder: 'default from profile' });
-    const include = input('text', '', { placeholder: 'optional, comma separated: /ch/*, /main/*' });
+    const host = input('text', '', { placeholder: 'the device\'s IP address, e.g. 192.168.1.60' });
+    const port = input('number', '', { placeholder: 'leave empty unless the device uses a non-standard port' });
+    const include = input('text', '', { placeholder: 'optional: only these sections, e.g. /ch/*, /main/*  (fewer = faster sync)' });
     f.append(...field('Id', id), ...field('Name', name), ...field('Profile', profile), ...field('IP address', host), ...field('Port', port), ...field('Include', include));
     const acts = document.createElement('div'); acts.className = 'actions';
     const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = txt; b.onclick = fn; return b; };
@@ -334,7 +382,7 @@
       bar.append(path, label, add);
     }
     main.appendChild(bar);
-    if (!state.ui.pins.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = state.editPins ? 'Add a pin above.' : 'No pins yet. Tap "Edit pins" to build your page, or add ui.pins in the config.'; main.appendChild(e); return; }
+    if (!state.ui.pins.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = state.editPins ? 'Type or pick a parameter above and tap Add pin. Faders, mutes, names and colours from any device can sit side by side.' : 'This is your walk-around page. Tap "Edit pins" and add the handful of controls you actually need during the show.'; main.appendChild(e); return; }
     const grid = document.createElement('div'); grid.className = 'grid';
     state.ui.pins.forEach((p, i) => {
       const c = card(p.path, p.label);
@@ -476,6 +524,30 @@
   }
 
   let toastT; function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2500); }
+
+  document.getElementById('help').onclick = () => { state.showHelp = !state.showHelp; render(); };
+  function helpPanel() {
+    const h = document.createElement('div'); h.className = 'help';
+    h.innerHTML = `<h3>Koine in one minute</h3>
+      Koine sits on the show network, learns every console and processor in its own language, and lets them talk to each other. Nothing here is a mixer app: it is the glue between the gear you already have.
+      <ol>
+        <li><b>Devices</b>: tell Koine what is on the network (console, receiver rack, DSP) and its IP address. It connects and reads everything: names, colours, faders, mutes.</li>
+        <li><b>Pinned</b>: build the page you want to walk around with. Any control from any device, side by side.</li>
+        <li><b>Rules</b>: "when this changes on one device, do that on another". Talkback on the FOH desk unmutes a channel on the monitor desk. A receiver's battery shows on a scribble strip. One rule can mirror a whole bank of mutes between brands.</li>
+      </ol>
+      <div class="meta">Every change made here is saved on the Koine host and shared with every screen. Devices from the config file cannot be removed here on purpose. A green dot means Koine is talking to that device right now.</div>`;
+    const close = document.createElement('button'); close.className = 'btn small'; close.textContent = 'Close'; close.style.marginTop = '8px'; close.onclick = () => { state.showHelp = false; render(); };
+    h.appendChild(close);
+    return h;
+  }
+  function gettingStarted(main) {
+    const h = document.createElement('div'); h.className = 'help';
+    h.innerHTML = `<h3>Welcome. Nothing is connected yet.</h3>Three steps, all from this screen:<ol><li>Open <b>Setup</b> and add your first device: pick its brand, type its IP address.</li><li>Open <b>Pinned</b> and pin the handful of controls you want with you when you walk the room.</li><li>Open <b>Rules</b> when you want two devices to react to each other.</li></ol>`;
+    const go = document.createElement('button'); go.className = 'btn primary'; go.textContent = 'Add the first device'; go.style.marginTop = '8px';
+    go.onclick = () => { state.view = 'setup'; state.deviceForm = true; buildNav(); render(); };
+    h.appendChild(go);
+    main.appendChild(h);
+  }
 
   // ---------------------------------------------------------------- boot
   fetch('/api/ui').then((r) => r.json()).then((ui) => { state.ui = { pins: [], ...ui }; $('#title').textContent = ui.title || ui.name || 'koine'; document.title = `${ui.title || ui.name || 'koine'} · koine`; render(); }).catch(() => {});

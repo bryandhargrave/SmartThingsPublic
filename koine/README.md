@@ -41,7 +41,7 @@ another. It is zero-dependency Node.js: copy the folder, run `node`, nothing to 
 
 ```bash
 cd koine
-npm test          # 53 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
+npm test          # 58 tests, including end-to-end runs against mock X32, Yamaha, SQ and ULX-D
 npm run demo      # four mock devices + example rules, UI at http://localhost:8010/ui
 ```
 
@@ -137,6 +137,50 @@ The same operations are available over REST for anything else that wants to prog
 
 ![Rule editor on the iPad](docs/ui-rule-editor.png)
 
+## Network behaviour
+
+Koine is designed to be a polite guest on a show network that also carries Dante, console
+control and lighting. What it puts on the wire, exactly:
+
+| Direction | Traffic | Bounds |
+| --- | --- | --- |
+| To each device | unicast only, to the IP you configured, on that vendor's control port | writes coalesced per parameter (default 1 per 15 ms, last value wins); device-wide cap `maxTxPerSec` (default 400); start-up sync paced by `queryRateLimit` |
+| Keepalives | X32 `/xremote` every 8 s, `/xinfo` every 3 s; Yamaha `devstatus` every 5 s; SQ poll every 5 s | a few packets per second per device, constant, tiny |
+| Reconnects | TCP reconnects back off 2 s → 4 s → … → 30 s while a device is unreachable; UDP pings every 2 s | never hammers a console that is rebooting |
+| From clients | HTTP/WebSocket on one TCP port, OSC on one UDP port | shadow updates batched every 8 ms; UDP subscriptions expire after 60 s without renewal; request bodies capped at 1 MB |
+| Discovery | mDNS on 224.0.0.251 announcing `_oscjson._tcp` and `_osc._udp` | 3 announcements at start, then one per minute; answers only queries for its own names. `mdns: false` turns it off entirely |
+
+Koine never scans the network, never broadcasts, never sends multicast other than the optional mDNS
+announcement, never opens a connection it was not configured to open, and never speaks to a Dante
+device (audio routing stays with Dante Controller or your own tools). Bind the northbound ports to a
+specific interface with `daemon.http.host` / `daemon.osc.host` so the iPad side lives on the control
+VLAN and nothing is exposed on the Dante VLAN.
+
+Ports to allow on a managed switch or firewall:
+
+| Port | Protocol | Purpose |
+| --- | --- | --- |
+| 8010/tcp (configurable) | HTTP + WebSocket | OSCQuery, REST, the web page |
+| 9000/udp (configurable) | OSC | TouchOSC / QLab / Companion |
+| 5353/udp multicast | mDNS | optional discovery |
+| 10023/udp, 10024/udp | OSC | X32/M32, X Air |
+| 49280/tcp | SCP | Yamaha |
+| 51325/tcp | MIDI over TCP | Allen & Heath |
+| 2202/tcp | command strings | Shure receivers |
+
+There is no authentication on the northbound API yet: anyone who can reach the page can move a fader.
+Run it on the isolated control network, not on venue guest Wi-Fi.
+
+## At the gig
+
+1. Plug the Koine host into the control VLAN. Start it: `node bin/koine.js start -c config/daemon.yaml`
+   (or `npm run demo` with no gear, to show someone what it does).
+2. On the iPad, open `http://<host-ip>:8010/ui`. Add it to the home screen; it runs full-screen.
+3. **Setup** tab: add each device by brand and IP. Green dot means Koine is talking to it.
+4. **Pinned** tab: Edit pins, add the handful of controls you want with you.
+5. **Rules** tab: New rule, pick an example, adjust the paths, Test, Add. It is live immediately.
+6. If Wi-Fi drops, the page reconnects on its own and is current within a second, from Koine's cache.
+
 ## Normalised namespace
 
 Every device is mounted under its configured id. Paths and units are the same regardless of vendor:
@@ -205,7 +249,7 @@ Scales (all bidirectional): `identity`, `int`, `float`, `string{maxLength,trim}`
 
 | transport | used for | key options |
 | --- | --- | --- |
-| `osc-udp` | X32/M32, X Air, DiGiCo, any OSC DSP | `keepalive`, `ping`, `timeoutMs`, `onConnect`, `confirmWrites`, `queryRateLimit` |
+| `osc-udp` | X32/M32, X Air, DiGiCo, any OSC DSP | `keepalive`, `ping`, `timeoutMs`, `onConnect`, `confirmWrites`, `queryRateLimit`, `writeCoalesceMs`, `maxTxPerSec` |
 | `tcp-line` | Yamaha SCP, Shure, Q-SYS, any text protocol | `delimiter`, `keepalive.command`, `dialect.{get,set,response,error,resync}` with `key`/`raw` regex groups |
 | `midi-tcp` | A&H SQ/dLive/Avantis | `midiChannel`, `poll.intervalMs`, `sysexHeader`; device forms `nrpn`, `note`, `sysex` |
 

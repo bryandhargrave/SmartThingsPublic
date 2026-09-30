@@ -42,6 +42,7 @@ class TcpLineDriver extends BaseDriver {
       this.emit('log', 'info', `${this.deviceId}: TCP connected to ${this.host}:${this.port}`);
       this._lastRx = Date.now();
       this.stats.reconnects++;
+      this._resetBackoff();
       this._setConnected(true);
       if (t.onConnect) for (const c of t.onConnect) this._writeLine(c);
       if (t.keepalive) this._writeLine(t.keepalive.command);
@@ -56,7 +57,8 @@ class TcpLineDriver extends BaseDriver {
       this._timer = null;
       this._setConnected(false, 'closed');
       if (!this.closed) {
-        const ms = t.reconnectMs || 2000;
+        const ms = this._nextBackoff();
+        this.emit('log', 'debug', `${this.deviceId}: reconnecting in ${ms}ms`);
         this._reconnect = setTimeout(() => this._open(), ms);
         if (this._reconnect.unref) this._reconnect.unref();
       }
