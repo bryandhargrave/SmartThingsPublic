@@ -1,0 +1,189 @@
+# Yamaha SCP ("Simple Control Protocol" / Remote Control Protocol) over TCP, port 49280.
+# Applies to CL/QL, TF, Rivage PM, DM3/DM7 (parameter set varies by model; unknown
+# addresses simply return ERROR and are ignored).
+id: yamaha-scp
+name: Yamaha SCP (CL/QL/TF/Rivage/DM)
+vendor: Yamaha
+models: [CL1, CL3, CL5, QL1, QL5, TF1, TF3, TF5, TF-Rack, DM3, DM7, Rivage PM]
+verified: true
+notes: |
+  Levels are integers in 1/100 dB; -32768 means -inf. Channel indexes are zero-based.
+  The console pushes "NOTIFY set ..." for every change made on the surface; "NOTIFY sscurrent"
+  (scene recall) triggers a full re-sync. "devstatus runmode" is used as a keepalive.
+
+transport:
+  type: tcp-line
+  port: 49280
+  delimiter: "\n"
+  reconnectMs: 2000
+  timeoutMs: 20000
+  queryRateLimit: 60
+  keepalive: { command: "devstatus runmode", intervalMs: 5000 }
+  dialect:
+    get: "get {device}"
+    set: "set {device} {raw}"
+    quoteStrings: true
+    response: '^(?:OK|OKm|NOTIFY)\s+(?:get|set|sscurrent_ex|sscurrent)\s+(?<key>\S+\s+\d+\s+\d+)\s+(?<raw>.*)$'
+    error: '^ERROR\b'
+    resync: '^NOTIFY\s+sscurrent'
+
+ranges:
+  ch:   { from: 1, to: 48, pad: 2 }
+  mix:  { from: 1, to: 24, pad: 2 }
+  mtx:  { from: 1, to: 8, pad: 2 }
+  dca:  { from: 1, to: 16, pad: 2 }
+
+parameters:
+  - path: /ch/{ch}/fader
+    device: "MIXER:Current/InCh/Fader/Level {ch0} 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+    description: Input channel {ch1} fader level
+
+  - path: /ch/{ch}/mute
+    device: "MIXER:Current/InCh/Fader/On {ch0} 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+    description: Input channel {ch1} mute (true = muted)
+
+  - path: /ch/{ch}/name
+    device: "MIXER:Current/InCh/Label/Name {ch0} 0"
+    type: string
+    deviceType: s
+    scale: { type: string, maxLength: 8 }
+    role: name
+    description: Input channel {ch1} name
+
+  - path: /ch/{ch}/color
+    device: "MIXER:Current/InCh/Label/Color {ch0} 0"
+    type: color
+    deviceType: s
+    role: color
+    scale:
+      type: enum
+      map: { "Off": "#000000", "Blue": "#0a84ff", "Orange": "#ff9500", "Yellow": "#ffcc00", "Purple": "#af52de",
+             "Cyan": "#32ade6", "Magenta": "#ff2d92", "Red": "#ff3b30", "Green": "#34c759", "SkyBlue": "#5ac8fa", "Pink": "#ff6482" }
+    description: Input channel {ch1} color
+
+  - path: /ch/{ch}/pan
+    device: "MIXER:Current/InCh/ToSt/Pan {ch0} 0"
+    type: int
+    unit: "%"
+    range: [-63, 63]
+    deviceType: i
+    scale: { type: int }
+    description: Input channel {ch1} pan to stereo
+
+  - path: /ch/{ch}/send/{mix}/level
+    device: "MIXER:Current/InCh/ToMix/Level {ch0} {mix0}"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    description: Input channel {ch1} send to mix {mix1}
+
+  - path: /mix/{mix}/fader
+    device: "MIXER:Current/Mix/Fader/Level {mix0} 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+  - path: /mix/{mix}/mute
+    device: "MIXER:Current/Mix/Fader/On {mix0} 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /mix/{mix}/name
+    device: "MIXER:Current/Mix/Label/Name {mix0} 0"
+    type: string
+    deviceType: s
+    role: name
+
+  - path: /mtx/{mtx}/fader
+    device: "MIXER:Current/Mtrx/Fader/Level {mtx0} 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+  - path: /mtx/{mtx}/mute
+    device: "MIXER:Current/Mtrx/Fader/On {mtx0} 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /mtx/{mtx}/name
+    device: "MIXER:Current/Mtrx/Label/Name {mtx0} 0"
+    type: string
+    deviceType: s
+    role: name
+
+  - path: /main/st/fader
+    device: "MIXER:Current/St/Fader/Level 0 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+    description: Stereo master fader
+  - path: /main/st/mute
+    device: "MIXER:Current/St/Fader/On 0 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+    description: Stereo master mute
+  - path: /main/mono/fader
+    device: "MIXER:Current/Mono/Fader/Level 0 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+  - path: /main/mono/mute
+    device: "MIXER:Current/Mono/Fader/On 0 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+
+  - path: /dca/{dca}/fader
+    device: "MIXER:Current/DCA/Fader/Level {dca0} 0"
+    type: float
+    unit: dB
+    range: [-138, 10]
+    deviceType: i
+    scale: { type: linear, raw: [-13800, 1000], value: [-138, 10], rawMinSentinel: -32768 }
+    role: fader
+  - path: /dca/{dca}/mute
+    device: "MIXER:Current/DCA/Fader/On {dca0} 0"
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /dca/{dca}/name
+    device: "MIXER:Current/DCA/Label/Name {dca0} 0"
+    type: string
+    deviceType: s
+    role: name
+
+  - path: /scene/current
+    device: "MIXER:Lib/Scene/Current 0 0"
+    type: int
+    deviceType: i
+    access: r
+    scale: { type: int }
+    description: Currently recalled scene number

@@ -1,0 +1,18 @@
+{
+  "name": "paad",
+  "version": "0.1.0",
+  "description": "Headless Pro Audio Translation Daemon: declarative console drivers, shadow state, OSCQuery + WebSocket northbound API",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "bin": { "paad": "bin/paad.js" },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node bin/paad.js start -c config/daemon.yaml",
+    "demo": "node bin/paad.js demo",
+    "test": "node --test test/*.test.js",
+    "validate": "node bin/paad.js validate profiles"
+  },
+  "dependencies": {},
+  "keywords": ["osc", "oscquery", "x32", "yamaha", "scp", "allen-heath", "mixer", "pro-audio", "websocket", "mdns"]
+}

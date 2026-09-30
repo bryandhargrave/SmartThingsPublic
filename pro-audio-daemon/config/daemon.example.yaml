@@ -1,0 +1,45 @@
+# paad daemon configuration. Copy to config/daemon.yaml and edit.
+daemon:
+  name: FOH Translator          # advertised via mDNS as <name>._oscjson._tcp
+  http: { port: 8010, host: 0.0.0.0 }   # OSCQuery + WebSocket + REST + /ui
+  osc: { port: 9000 }                   # normalized OSC/UDP endpoint (set false to disable)
+  mdns: true
+  logLevel: info
+  echoWindowMs: 1500            # how long a client write waits for the device to echo it
+  batchMs: 8                    # coalesce shadow-state changes into batches this often (~120 Hz)
+
+# Optional: extra profile directory (community / venue-specific profiles). Same id overrides built-ins.
+# profilesDir: /etc/paad/profiles
+
+devices:
+  - id: x32
+    name: FOH X32
+    profile: behringer-x32
+    host: 192.168.1.50
+    # include: ["/ch/*", "/main/*", "/dca/*", "/bus/*", "/out/*", "/talkback/*"]  # restrict namespace (OSC patterns)
+    # exclude: ["/ch/*/eq/*"]
+    # transport: { queryRateLimit: 100 }   # per-device transport overrides
+
+  - id: cl5
+    name: Monitor CL5
+    profile: yamaha-scp
+    host: 192.168.1.60
+    include: ["/ch/*", "/mix/*", "/main/*", "/dca/*", "/scene/*"]
+
+  - id: pa
+    name: PA Drive (SQ as system DSP)
+    profile: allen-heath-sq
+    host: 192.168.1.70
+    include: ["/main/*", "/ch/0[1-8]/*"]
+
+# Walk-around UI: only the parameters that matter during tuning, across all vendors.
+ui:
+  title: Walk-around
+  pins:
+    - { path: /x32/ch/10/fader, label: Lead Vox }
+    - { path: /x32/ch/10/mute, label: Lead Vox Mute }
+    - { path: /x32/talkback/a, label: FOH Talkback }
+    - { path: /x32/main/st/mute, label: PA Main Mute }
+    - { path: /pa/main/lr/fader, label: Sub Level }
+    - { path: /x32/out/09/delay/ms, label: Front Fill Delay }
+    - { path: /cl5/ch/01/fader, label: Mon Kick }

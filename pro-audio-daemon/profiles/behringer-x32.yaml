@@ -1,0 +1,324 @@
+# Behringer X32 / Midas M32 family: OSC over UDP, port 10023.
+# Reference: "X32 OSC Remote Protocol" (Patrick-Gilles Maillot), console firmware 4.x.
+id: behringer-x32
+name: Behringer X32 / Midas M32
+vendor: Behringer / Midas
+models: [X32, X32 Compact, X32 Producer, X32 Rack, X32 Core, M32, M32R, M32C]
+verified: true
+notes: |
+  The console only pushes parameter changes to a client for ~10 s after receiving /xremote,
+  so the daemon re-arms it every 8 s. /xinfo doubles as a liveness ping. Values are queried
+  by sending the address with no arguments.
+
+transport:
+  type: osc-udp
+  port: 10023
+  keepalive: { address: /xremote, intervalMs: 8000 }
+  ping: { address: /xinfo, intervalMs: 3000 }
+  timeoutMs: 10000
+  confirmWrites: true        # X32 never echoes a write to its sender; re-query 250 ms after writes settle
+  confirmDelayMs: 250
+  queryRateLimit: 200
+
+ranges:
+  ch:   { from: 1, to: 32, pad: 2 }
+  aux:  { from: 1, to: 8,  pad: 2 }
+  fxr:  { from: 1, to: 8,  pad: 2 }
+  bus:  { from: 1, to: 16, pad: 2 }
+  mtx:  { from: 1, to: 6,  pad: 2 }
+  dca:  { from: 1, to: 8 }
+  band: { from: 1, to: 4 }
+  out:  { from: 1, to: 16, pad: 2 }
+
+# Reusable scale definitions are inlined per parameter (YAML anchors are not needed).
+# X32 fader law (raw 0..1 -> dB), piecewise linear per the protocol document.
+parameters:
+  # ---------------------------------------------------------------- input channels
+  - path: /ch/{ch}/fader
+    device: /ch/{ch}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+    description: Channel {ch} fader level
+
+  - path: /ch/{ch}/mute
+    device: /ch/{ch}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+    description: Channel {ch} mute (true = muted)
+
+  - path: /ch/{ch}/name
+    device: /ch/{ch}/config/name
+    type: string
+    deviceType: s
+    scale: { type: string, maxLength: 12 }
+    role: name
+    description: Channel {ch} scribble strip name
+
+  - path: /ch/{ch}/color
+    device: /ch/{ch}/config/color
+    type: color
+    deviceType: i
+    role: color
+    scale:
+      type: enum
+      map: { 0: "#000000", 1: "#ff3b30", 2: "#34c759", 3: "#ffcc00", 4: "#0a84ff", 5: "#ff2d92", 6: "#32ade6", 7: "#ffffff",
+             8: "#000000", 9: "#ff3b30", 10: "#34c759", 11: "#ffcc00", 12: "#0a84ff", 13: "#ff2d92", 14: "#32ade6", 15: "#ffffff" }
+    description: Channel {ch} scribble strip color
+
+  - path: /ch/{ch}/pan
+    device: /ch/{ch}/mix/pan
+    type: float
+    unit: "%"
+    range: [-100, 100]
+    deviceType: f
+    scale: { type: linear, raw: [0, 1], value: [-100, 100] }
+    description: Channel {ch} pan (-100 = left)
+
+  - path: /ch/{ch}/hpf/on
+    device: /ch/{ch}/preamp/hpon
+    type: bool
+    deviceType: i
+    scale: { type: bool }
+    description: Channel {ch} high-pass filter enable
+
+  - path: /ch/{ch}/hpf/freq
+    device: /ch/{ch}/preamp/hpf
+    type: float
+    unit: Hz
+    range: [20, 400]
+    deviceType: f
+    scale: { type: log, raw: [0, 1], value: [20, 400] }
+    description: Channel {ch} high-pass frequency
+
+  - path: /ch/{ch}/eq/{band}/freq
+    device: /ch/{ch}/eq/{band}/f
+    type: float
+    unit: Hz
+    range: [20, 20000]
+    deviceType: f
+    scale: { type: log, raw: [0, 1], value: [20, 20000] }
+    description: Channel {ch} EQ band {band} frequency
+
+  - path: /ch/{ch}/eq/{band}/gain
+    device: /ch/{ch}/eq/{band}/g
+    type: float
+    unit: dB
+    range: [-15, 15]
+    deviceType: f
+    scale: { type: linear, raw: [0, 1], value: [-15, 15] }
+    description: Channel {ch} EQ band {band} gain
+
+  - path: /ch/{ch}/eq/{band}/q
+    device: /ch/{ch}/eq/{band}/q
+    type: float
+    range: [0.3, 10]
+    deviceType: f
+    scale: { type: log, raw: [0, 1], value: [10, 0.3] }
+    description: Channel {ch} EQ band {band} Q
+
+  - path: /ch/{ch}/send/{bus}/level
+    device: /ch/{ch}/mix/{bus}/level
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    description: Channel {ch} send level to bus {bus}
+
+  # ---------------------------------------------------------------- aux ins / fx returns
+  - path: /auxin/{aux}/fader
+    device: /auxin/{aux}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /auxin/{aux}/mute
+    device: /auxin/{aux}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /auxin/{aux}/name
+    device: /auxin/{aux}/config/name
+    type: string
+    deviceType: s
+    role: name
+
+  - path: /fxrtn/{fxr}/fader
+    device: /fxrtn/{fxr}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /fxrtn/{fxr}/mute
+    device: /fxrtn/{fxr}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+
+  # ---------------------------------------------------------------- mix buses / matrices
+  - path: /bus/{bus}/fader
+    device: /bus/{bus}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+    description: Bus {bus} fader level
+  - path: /bus/{bus}/mute
+    device: /bus/{bus}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /bus/{bus}/name
+    device: /bus/{bus}/config/name
+    type: string
+    deviceType: s
+    role: name
+  - path: /bus/{bus}/color
+    device: /bus/{bus}/config/color
+    type: color
+    deviceType: i
+    role: color
+    scale:
+      type: enum
+      map: { 0: "#000000", 1: "#ff3b30", 2: "#34c759", 3: "#ffcc00", 4: "#0a84ff", 5: "#ff2d92", 6: "#32ade6", 7: "#ffffff",
+             8: "#000000", 9: "#ff3b30", 10: "#34c759", 11: "#ffcc00", 12: "#0a84ff", 13: "#ff2d92", 14: "#32ade6", 15: "#ffffff" }
+
+  - path: /mtx/{mtx}/fader
+    device: /mtx/{mtx}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /mtx/{mtx}/mute
+    device: /mtx/{mtx}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /mtx/{mtx}/name
+    device: /mtx/{mtx}/config/name
+    type: string
+    deviceType: s
+    role: name
+
+  # ---------------------------------------------------------------- mains
+  - path: /main/st/fader
+    device: /main/st/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+    description: Main L/R fader
+  - path: /main/st/mute
+    device: /main/st/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+    description: Main L/R mute
+  - path: /main/st/name
+    device: /main/st/config/name
+    type: string
+    deviceType: s
+    role: name
+  - path: /main/m/fader
+    device: /main/m/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+    description: Mono / center fader
+  - path: /main/m/mute
+    device: /main/m/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+
+  # ---------------------------------------------------------------- DCAs
+  - path: /dca/{dca}/fader
+    device: /dca/{dca}/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /dca/{dca}/mute
+    device: /dca/{dca}/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /dca/{dca}/name
+    device: /dca/{dca}/config/name
+    type: string
+    deviceType: s
+    role: name
+  - path: /dca/{dca}/color
+    device: /dca/{dca}/config/color
+    type: color
+    deviceType: i
+    role: color
+    scale:
+      type: enum
+      map: { 0: "#000000", 1: "#ff3b30", 2: "#34c759", 3: "#ffcc00", 4: "#0a84ff", 5: "#ff2d92", 6: "#32ade6", 7: "#ffffff",
+             8: "#000000", 9: "#ff3b30", 10: "#34c759", 11: "#ffcc00", 12: "#0a84ff", 13: "#ff2d92", 14: "#32ade6", 15: "#ffffff" }
+
+  # ---------------------------------------------------------------- output delays (front fills, delays)
+  - path: /out/{out}/delay/on
+    device: /outputs/main/{out}/delay/on
+    type: bool
+    deviceType: i
+    scale: { type: bool }
+    description: Output {out} delay enable
+  - path: /out/{out}/delay/ms
+    device: /outputs/main/{out}/delay/time
+    type: float
+    unit: ms
+    range: [0.3, 500]
+    deviceType: f
+    scale: { type: linear, raw: [0, 1], value: [0.3, 500] }
+    description: Output {out} delay time
+
+  # ---------------------------------------------------------------- talkback / misc
+  - path: /talkback/a
+    device: /-stat/talk/A
+    type: bool
+    deviceType: i
+    scale: { type: bool }
+    description: Talkback A active
+  - path: /talkback/b
+    device: /-stat/talk/B
+    type: bool
+    deviceType: i
+    scale: { type: bool }
+    description: Talkback B active
+  - path: /scene/current
+    device: /-show/prepos/current
+    type: int
+    deviceType: i
+    range: [0, 99]
+    access: r
+    description: Currently loaded scene index

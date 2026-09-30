@@ -1,0 +1,80 @@
+# Allen & Heath SQ series: MIDI over TCP, port 51325.
+# Reference: "SQ MIDI Protocol" document (NRPN for levels, Note On for mutes, SysEx for names/colours).
+#
+# verified: false  ->  the NRPN parameter numbers, note offsets and fader table below follow the
+# published protocol document as closely as this profile's author could reconstruct them, but have
+# not been confirmed against hardware. Please verify and send corrections.
+id: allen-heath-sq
+name: Allen & Heath SQ (MIDI/TCP)
+vendor: Allen & Heath
+models: [SQ-5, SQ-6, SQ-7]
+verified: false
+notes: |
+  The SQ does not push state unsolicited unless "MIDI over TCP" transmit is enabled in
+  Setup > Control. This driver therefore polls (query) all parameters every poll.intervalMs
+  in addition to listening for unsolicited changes. Fader values are 14-bit NRPN data; the
+  dB curve is a piecewise approximation of the protocol document's level table.
+
+transport:
+  type: midi-tcp
+  port: 51325
+  midiChannel: 0
+  reconnectMs: 2000
+  queryRateLimit: 40
+  poll: { intervalMs: 5000 }
+  confirmWrites: true        # SQ does not echo writes to the sender; re-query after writes settle
+  sysexHeader: [0x00, 0x00, 0x1A, 0x50, 0x11, 0x01, 0x00]
+
+ranges:
+  ch: { from: 1, to: 48, pad: 2 }
+
+parameters:
+  - path: /ch/{ch}/fader
+    device: { kind: nrpn, msb: "{ch0}", lsb: 0x17 }
+    type: float
+    unit: dB
+    range: [-90, 10]
+    scale: { type: piecewise, round: true, points: [[0, -90], [420, -80], [1500, -60], [4483, -40], [14003, 0], [16383, 10]] }
+    role: fader
+    description: Input {ch1} fader to LR
+
+  - path: /ch/{ch}/mute
+    device: { kind: note, note: "{ch0}", on: 0x7F, off: 0x3F }
+    type: bool
+    poll: false
+    scale: { type: bool }
+    role: mute
+    description: Input {ch1} mute
+
+  - path: /ch/{ch}/name
+    device: { kind: sysex, get: 0x01, response: 0x02, set: 0x03, index: "{ch0}", encoding: ascii, maxLength: 8 }
+    type: string
+    scale: { type: string, maxLength: 8 }
+    role: name
+    description: Input {ch1} name
+
+  - path: /ch/{ch}/color
+    device: { kind: sysex, get: 0x04, response: 0x05, set: 0x06, index: "{ch0}", encoding: byte }
+    type: color
+    role: color
+    scale:
+      type: enum
+      map: { 0: "#000000", 1: "#ff3b30", 2: "#34c759", 3: "#ffcc00", 4: "#0a84ff", 5: "#af52de", 6: "#32ade6", 7: "#ffffff" }
+    description: Input {ch1} colour
+
+  - path: /main/lr/fader
+    device: { kind: nrpn, msb: 0x44, lsb: 0x17 }
+    type: float
+    unit: dB
+    range: [-90, 10]
+    scale: { type: piecewise, round: true, points: [[0, -90], [420, -80], [1500, -60], [4483, -40], [14003, 0], [16383, 10]] }
+    role: fader
+    description: LR master fader
+
+  - path: /main/lr/mute
+    device: { kind: note, note: 0x44, on: 0x7F, off: 0x3F }
+    type: bool
+    poll: false
+    scale: { type: bool }
+    role: mute
+    description: LR master mute

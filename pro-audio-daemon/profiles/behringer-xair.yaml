@@ -1,0 +1,132 @@
+# Behringer X Air (XR12/XR16/XR18) and Midas MR12/MR18: OSC over UDP, port 10024.
+id: behringer-xair
+name: Behringer X Air / Midas MR
+vendor: Behringer / Midas
+models: [XR12, XR16, XR18, MR12, MR18, X18]
+verified: true
+
+transport:
+  type: osc-udp
+  port: 10024
+  keepalive: { address: /xremote, intervalMs: 8000 }
+  ping: { address: /xinfo, intervalMs: 3000 }
+  timeoutMs: 10000
+  confirmWrites: true        # X32 never echoes a write to its sender; re-query 250 ms after writes settle
+  confirmDelayMs: 250
+  queryRateLimit: 150
+
+ranges:
+  ch:  { from: 1, to: 16, pad: 2 }
+  bus: { from: 1, to: 6 }
+  fx:  { from: 1, to: 4 }
+  dca: { from: 1, to: 4 }
+
+parameters:
+  - path: /ch/{ch}/fader
+    device: /ch/{ch}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /ch/{ch}/mute
+    device: /ch/{ch}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /ch/{ch}/name
+    device: /ch/{ch}/config/name
+    type: string
+    deviceType: s
+    scale: { type: string, maxLength: 12 }
+    role: name
+  - path: /ch/{ch}/color
+    device: /ch/{ch}/config/color
+    type: color
+    deviceType: i
+    role: color
+    scale:
+      type: enum
+      map: { 0: "#000000", 1: "#ff3b30", 2: "#34c759", 3: "#ffcc00", 4: "#0a84ff", 5: "#ff2d92", 6: "#32ade6", 7: "#ffffff",
+             8: "#000000", 9: "#ff3b30", 10: "#34c759", 11: "#ffcc00", 12: "#0a84ff", 13: "#ff2d92", 14: "#32ade6", 15: "#ffffff" }
+  - path: /ch/{ch}/pan
+    device: /ch/{ch}/mix/pan
+    type: float
+    unit: "%"
+    range: [-100, 100]
+    deviceType: f
+    scale: { type: linear, raw: [0, 1], value: [-100, 100] }
+  - path: /ch/{ch}/send/{bus}/level
+    device: /ch/{ch}/mix/0{bus}/level
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+
+  - path: /bus/{bus}/fader
+    device: /bus/{bus}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /bus/{bus}/mute
+    device: /bus/{bus}/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /bus/{bus}/name
+    device: /bus/{bus}/config/name
+    type: string
+    deviceType: s
+    role: name
+
+  - path: /fxsend/{fx}/fader
+    device: /fxsend/{fx}/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+
+  - path: /main/lr/fader
+    device: /lr/mix/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+    description: Main L/R fader
+  - path: /main/lr/mute
+    device: /lr/mix/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+
+  - path: /dca/{dca}/fader
+    device: /dca/{dca}/fader
+    type: float
+    unit: dB
+    range: [-90, 10]
+    deviceType: f
+    scale: { type: piecewise, points: [[0, -90], [0.0625, -60], [0.25, -30], [0.5, -10], [1, 10]] }
+    role: fader
+  - path: /dca/{dca}/mute
+    device: /dca/{dca}/on
+    type: bool
+    deviceType: i
+    scale: { type: bool, invert: true }
+    role: mute
+  - path: /dca/{dca}/name
+    device: /dca/{dca}/config/name
+    type: string
+    deviceType: s
+    role: name
